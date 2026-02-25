@@ -9,3 +9,5 @@ dist/
 .tmp/
 *.log
 .DS_Store
+__pycache__/
+*.py[cod]
