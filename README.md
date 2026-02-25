@@ -17,6 +17,7 @@ Core product scope:
 - Prompt-to-image generation with reusable style presets and user-scoped generation history.
 - Public/private galleries for outputs and LoRAs, including social discovery and curation paths.
 - Integrated crediting system to govern platform usage, queue pressure, and feature access.
+- Current model-class focus is `Stable Diffusion 1.5` and `SDXL`; `Flux` is not the primary target at this stage.
 
 Technical profile:
 - Monorepo architecture with dedicated services:
