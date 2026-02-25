@@ -3,11 +3,35 @@
 AI community platform for model training, image generation, public/private galleries, multi-user management, and a built-in credit system.
 
 ## What FrameWorkX Is
-- AI community website with user accounts, roles, and permissions.
-- Integrated trainer pipeline for LoRA/model workflows.
-- Integrated generator for prompt-based image creation.
-- Gallery and social-style sharing flows for models and outputs.
-- Credit-based usage and admin controls for platform operations.
+FrameWorkX is the unified successor of the Frame Family apps:
+`FrameForge`, `FrameKeep`, `FrameCreate`, and `FrameView`.
+These previously existed as separate internal products and are now consolidated into one platform.
+
+Instead of splitting features across multiple tools, FrameWorkX combines training, generation,
+publishing, and community operations into one platform with a shared identity, shared storage model,
+and shared credit economy.
+
+Core product scope:
+- Community-first AI platform with multi-user accounts, role/permission controls, and moderation-ready flows.
+- End-to-end model workflow: dataset intake, preprocessing, training orchestration, and model publishing.
+- Prompt-to-image generation with reusable style presets and user-scoped generation history.
+- Public/private galleries for outputs and LoRAs, including social discovery and curation paths.
+- Integrated crediting system to govern platform usage, queue pressure, and feature access.
+
+Technical profile:
+- Monorepo architecture with dedicated services:
+  - `apps/api` for HTTP API, auth, business logic, and platform orchestration.
+  - `apps/ui` for the web frontend and user experience layer.
+  - `apps/worker` for asynchronous jobs (training, generation, credit/stat tasks, notifications).
+  - `apps/edge` and `apps/indexer` for auxiliary runtime and indexing/search support.
+- PostgreSQL-backed domain model with versioned SQL migrations under `packages/db`.
+- Shared runtime libraries in `packages/shared` for config, DB access, credit logic, and common utilities.
+- Systemd-oriented production operation with separable services and templated worker instances.
+
+Operational focus:
+- Built for long-running, multi-tenant workloads where many jobs are active in parallel.
+- Designed so operators can trace jobs, users, assets, and credits without leaving the platform.
+- Suitable as a single deployment target for teams that previously maintained multiple Frame apps.
 
 ## Local Setup (No Docker)
 
