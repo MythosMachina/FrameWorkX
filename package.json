@@ -1,0 +1,26 @@
+{
+  "name": "frameworkx",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:edge": "npm run -w @frameworkx/edge dev",
+    "dev:api": "npm run -w @frameworkx/api dev",
+    "dev:worker": "npm run -w @frameworkx/worker dev",
+    "dev:indexer": "npm run -w @frameworkx/indexer dev",
+    "dev:ui": "npm run -w @frameworkx/ui dev",
+    "build": "npm run -w @frameworkx/shared build && npm run -w @frameworkx/edge build && npm run -w @frameworkx/api build && npm run -w @frameworkx/worker build && npm run -w @frameworkx/indexer build && npm run -w @frameworkx/ui build",
+    "start:edge": "npm run -w @frameworkx/edge start",
+    "start:api": "npm run -w @frameworkx/api start",
+    "start:worker": "npm run -w @frameworkx/worker start",
+    "start:indexer": "npm run -w @frameworkx/indexer start",
+    "start:ui": "npm run -w @frameworkx/ui preview"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.521.0",
+    "@aws-sdk/lib-storage": "^3.521.0",
+    "pg": "^8.12.0"
+  }
+}

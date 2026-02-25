@@ -1,0 +1,29 @@
+{
+  "name": "@frameworkx/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^8.5.0",
+    "@fastify/jwt": "^7.2.1",
+    "@fastify/multipart": "^8.2.0",
+    "@frameworkx/shared": "*",
+    "argon2": "^0.31.2",
+    "fastify": "^4.28.1",
+    "nodemailer": "^6.9.13",
+    "pg": "^8.12.0",
+    "unzipper": "^0.12.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/nodemailer": "^6.4.17",
+    "@types/unzipper": "^0.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
