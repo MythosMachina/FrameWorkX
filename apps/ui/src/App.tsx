@@ -5254,8 +5254,6 @@ export default function App() {
           <div className="logo">
             <img src="/logo.png" alt="FrameWorkX logo" loading="eager" decoding="async" />
           </div>
-          <div className="brand-title">FrameWorkX</div>
-          <div className="brand-subtitle">Mjolnir Console</div>
         </div>
         <nav className="rail-nav">
           {nav.map((key) => {
@@ -5316,10 +5314,7 @@ export default function App() {
       </aside>
       <div className="main">
         <header className="topbar">
-          <div>
-            <div className="brand-title">FrameWorkX</div>
-            <div className="brand-subtitle">Unified pipeline control</div>
-          </div>
+          <div></div>
           <div className="top-actions">
             {isAdmin ? (
               <button
@@ -5408,7 +5403,6 @@ export default function App() {
           <section className={`view ${view === "dashboard" ? "is-active" : ""}`}>
             <div className="view-header">
               <h1>{t.commandDeck}</h1>
-              <p>{t.queue}</p>
             </div>
             {isMobileRouteActive ? (
               <div className="mobile-command-deck">
