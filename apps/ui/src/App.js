@@ -477,8 +477,51 @@ function expandWildcardPromptPreview(prompt, lists, mode) {
     return { tokens, missing: [], variants };
 }
 const MOBILE_ROUTE_PATH = "/m";
+const VIEW_SEGMENT_MAP = {
+    dashboard: "",
+    pipeline: "trainer",
+    generator: "generator",
+    gallery: "gallery",
+    lora: "lora",
+    messages: "messages",
+    settings: "settings",
+    admin: "admin",
+    profile: "profile"
+};
+const SEGMENT_VIEW_MAP = {
+    "": "dashboard",
+    trainer: "pipeline",
+    generator: "generator",
+    gallery: "gallery",
+    lora: "lora",
+    messages: "messages",
+    settings: "settings",
+    admin: "admin",
+    profile: "profile"
+};
 function isMobileRoute(pathname) {
     return pathname === MOBILE_ROUTE_PATH || pathname.startsWith(`${MOBILE_ROUTE_PATH}/`);
+}
+function normalizePathname(pathname) {
+    if (!pathname)
+        return "/";
+    if (pathname.length > 1 && pathname.endsWith("/"))
+        return pathname.replace(/\/+$/, "");
+    return pathname;
+}
+function getViewFromPathname(pathname) {
+    const normalized = normalizePathname(pathname);
+    const mobile = isMobileRoute(normalized);
+    const withoutMobile = mobile ? normalized.replace(/^\/m(?=\/|$)/, "") || "/" : normalized;
+    const segment = withoutMobile.split("/").filter(Boolean)[0] ?? "";
+    return SEGMENT_VIEW_MAP[segment] ?? "dashboard";
+}
+function getPathForView(view, mobile) {
+    const base = mobile ? MOBILE_ROUTE_PATH : "";
+    const segment = VIEW_SEGMENT_MAP[view] ?? "";
+    if (!segment)
+        return base || "/";
+    return `${base}/${segment}`;
 }
 function detectMobileClient() {
     if (typeof window === "undefined")
@@ -518,7 +561,7 @@ export default function App() {
     const [isMobileRouteActive, setIsMobileRouteActive] = useState(typeof window !== "undefined" ? isMobileRoute(window.location.pathname) : false);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [mobileShowCompletedJobs, setMobileShowCompletedJobs] = useState(false);
-    const [view, setView] = useState("dashboard");
+    const [view, setView] = useState(typeof window !== "undefined" ? getViewFromPathname(window.location.pathname) : "dashboard");
     const [settingsTab, setSettingsTab] = useState("profile");
     const [lang, setLang] = useState(() => getInitialLang());
     const [token, setAuthToken] = useState(getToken());
@@ -967,18 +1010,25 @@ export default function App() {
             return;
         const syncRoute = () => {
             setIsMobileRouteActive(isMobileRoute(window.location.pathname));
+            setView(getViewFromPathname(window.location.pathname));
         };
         const mobileClient = detectMobileClient();
         if (mobileClient && window.location.pathname === "/") {
             window.history.replaceState({}, "", MOBILE_ROUTE_PATH);
-            setIsMobileRouteActive(true);
         }
-        else {
-            syncRoute();
-        }
+        syncRoute();
         window.addEventListener("popstate", syncRoute);
         return () => window.removeEventListener("popstate", syncRoute);
     }, []);
+    useEffect(() => {
+        if (typeof window === "undefined" || !token)
+            return;
+        const targetPath = getPathForView(view, isMobileRouteActive);
+        const currentPath = normalizePathname(window.location.pathname);
+        if (currentPath === targetPath)
+            return;
+        window.history.pushState({}, "", `${targetPath}${window.location.search}${window.location.hash}`);
+    }, [view, isMobileRouteActive, token]);
     useEffect(() => {
         if (typeof document === "undefined")
             return;
@@ -3764,7 +3814,7 @@ export default function App() {
             .catch(() => setUploadMessage("Upload failed"));
     };
     if (!token) {
-        return (_jsxs("div", { className: `app-shell public-shell ${isMobileRouteActive ? "mobile-route" : ""}`, children: [_jsxs("div", { className: "main", children: [_jsxs("header", { className: "topbar", children: [_jsxs("div", { children: [_jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mjolnir Console" })] }), _jsxs("div", { className: "top-actions", children: [_jsx("button", { className: "action-btn ghost", onClick: () => setLoginOpen(true), children: t.signIn }), _jsx("button", { className: "action-btn", onClick: () => setApplyOpen(true), children: t.apply }), _jsxs("div", { className: "lang-switch", children: [_jsx("button", { onClick: () => setLang("en"), children: "EN" }), _jsx("button", { onClick: () => setLang("de"), children: "DE" })] })] })] }), _jsxs("main", { className: "content", children: [_jsxs("section", { className: `panel public-hero-v2 ${publicOverviewExpanded ? "is-expanded" : "is-collapsed"}`, children: [_jsxs("div", { className: "public-hero-v2-head", children: [_jsx("div", { className: "badge", children: t.publicAssetStats }), _jsx("button", { className: "action-btn ghost", onClick: () => setPublicOverviewExpanded((prev) => !prev), children: publicOverviewExpanded ? t.publicOverviewHide : t.publicOverviewShow })] }), publicOverviewExpanded ? (_jsxs(_Fragment, { children: [_jsxs("div", { className: "public-hero-v2-main", children: [_jsx("h1", { children: t.publicWelcomeTitle }), _jsx("p", { className: "public-hero-v2-lead", children: t.publicWelcomeLead }), _jsx("p", { className: "public-hero-v2-body", children: t.publicWelcomeBody }), _jsxs("ul", { className: "public-hero-v2-list", children: [_jsx("li", { children: t.publicFeatureOne }), _jsx("li", { children: t.publicFeatureTwo }), _jsx("li", { children: t.publicFeatureThree })] }), _jsxs("div", { className: "public-hero-v2-actions", children: [_jsx("button", { className: "action-btn", onClick: () => setLoginOpen(true), children: t.signIn }), _jsx("button", { className: "action-btn ghost", onClick: () => setApplyOpen(true), children: t.apply })] })] }), _jsxs("aside", { className: "public-hero-v2-side", children: [_jsx("div", { className: "detail-title", children: t.publicWhatIsTitle }), _jsx("div", { className: "muted small", children: t.publicWhatIsBody }), _jsxs("div", { className: "stat-grid", children: [_jsxs("div", { className: "stat-card", children: [_jsx("div", { className: "label", children: t.publicExploreImages }), _jsx("div", { className: "value", children: loginGallerySafe.length })] }), _jsxs("div", { className: "stat-card", children: [_jsx("div", { className: "label", children: t.publicExploreModels }), _jsx("div", { className: "value", children: loginModelsSafe.length + loginLorasSafe.length })] })] })] })] })) : null] }), _jsxs("div", { className: "public-grid", children: [_jsxs("section", { className: "panel login-feed", children: [_jsx("div", { className: "panel-header", children: _jsx("h3", { children: t.publicExploreImages }) }), _jsxs("div", { className: "gallery-grid", children: [loginGallerySafe.map((img) => (_jsxs("a", { className: "gallery-tile", href: publicImageHref(img.id, lang), title: `Open public image by @${img.username}`, onClick: (event) => {
+        return (_jsxs("div", { className: `app-shell public-shell ${isMobileRouteActive ? "mobile-route" : ""}`, children: [_jsxs("div", { className: "main", children: [_jsxs("header", { className: "topbar", children: [_jsx("div", { className: "public-topbar-logo", children: _jsx("img", { src: "/logo.png", alt: "FrameWorkX", loading: "eager", decoding: "async" }) }), _jsxs("div", { className: "top-actions", children: [_jsx("button", { className: "action-btn ghost", onClick: () => setLoginOpen(true), children: t.signIn }), _jsx("button", { className: "action-btn", onClick: () => setApplyOpen(true), children: t.apply }), _jsxs("div", { className: "lang-switch", children: [_jsx("button", { onClick: () => setLang("en"), children: "EN" }), _jsx("button", { onClick: () => setLang("de"), children: "DE" })] })] })] }), _jsxs("main", { className: "content", children: [_jsxs("section", { className: `panel public-hero-v2 ${publicOverviewExpanded ? "is-expanded" : "is-collapsed"}`, children: [_jsxs("div", { className: "public-hero-v2-head", children: [_jsx("div", { className: "badge", children: t.publicAssetStats }), _jsx("button", { className: "action-btn ghost", onClick: () => setPublicOverviewExpanded((prev) => !prev), children: publicOverviewExpanded ? t.publicOverviewHide : t.publicOverviewShow })] }), publicOverviewExpanded ? (_jsxs(_Fragment, { children: [_jsxs("div", { className: "public-hero-v2-main", children: [_jsx("h1", { children: t.publicWelcomeTitle }), _jsx("p", { className: "public-hero-v2-lead", children: t.publicWelcomeLead }), _jsx("p", { className: "public-hero-v2-body", children: t.publicWelcomeBody }), _jsxs("ul", { className: "public-hero-v2-list", children: [_jsx("li", { children: t.publicFeatureOne }), _jsx("li", { children: t.publicFeatureTwo }), _jsx("li", { children: t.publicFeatureThree })] }), _jsxs("div", { className: "public-hero-v2-actions", children: [_jsx("button", { className: "action-btn", onClick: () => setLoginOpen(true), children: t.signIn }), _jsx("button", { className: "action-btn ghost", onClick: () => setApplyOpen(true), children: t.apply })] })] }), _jsxs("aside", { className: "public-hero-v2-side", children: [_jsx("div", { className: "detail-title", children: t.publicWhatIsTitle }), _jsx("div", { className: "muted small", children: t.publicWhatIsBody }), _jsxs("div", { className: "stat-grid", children: [_jsxs("div", { className: "stat-card", children: [_jsx("div", { className: "label", children: t.publicExploreImages }), _jsx("div", { className: "value", children: loginGallerySafe.length })] }), _jsxs("div", { className: "stat-card", children: [_jsx("div", { className: "label", children: t.publicExploreModels }), _jsx("div", { className: "value", children: loginModelsSafe.length + loginLorasSafe.length })] })] })] })] })) : null] }), _jsxs("div", { className: "public-grid", children: [_jsxs("section", { className: "panel login-feed", children: [_jsx("div", { className: "panel-header", children: _jsx("h3", { children: t.publicExploreImages }) }), _jsxs("div", { className: "gallery-grid", children: [loginGallerySafe.map((img) => (_jsxs("a", { className: "gallery-tile", href: publicImageHref(img.id, lang), title: `Open public image by @${img.username}`, onClick: (event) => {
                                                                 event.preventDefault();
                                                                 fetch(`/api/gallery/images/public/${img.id}`)
                                                                     .then((res) => res.json())
@@ -4121,7 +4171,10 @@ export default function App() {
         })
             .catch(() => null);
     };
-    return (_jsxs("div", { className: `app-shell ${isMobileRouteActive ? "mobile-route" : ""}`, children: [isMobileRouteActive ? (_jsxs(_Fragment, { children: [_jsxs("header", { className: "mobile-topbar", children: [_jsxs("div", { className: "mobile-topbar-brand", children: [_jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mobile Console" })] }), _jsxs("div", { className: "mobile-topbar-actions", children: [_jsxs("button", { className: "action-btn ghost mobile-notify-btn", onClick: () => setNotificationWidgetOpen((prev) => !prev), children: ["\uD83D\uDD14", notificationUnread > 0 ? _jsx("span", { className: "notify-count", children: notificationUnread }) : null] }), _jsx("button", { className: "action-btn mobile-menu-btn", onClick: () => setMobileMenuOpen(true), children: "\u2630" })] })] }), notificationWidgetOpen ? (_jsxs("div", { className: "mobile-notify-panel", children: [_jsxs("div", { className: "notify-popout-head", children: [_jsx("span", { children: "Notifications" }), _jsx("button", { className: "action-btn ghost", onClick: () => markAllNotificationsRead(), children: "Read all" })] }), _jsx("div", { className: "notify-popout-list", children: notificationList.length === 0 ? (_jsx("div", { className: "muted small", children: "No notifications." })) : ([...notificationList]
+    return (_jsxs("div", { className: `app-shell ${isMobileRouteActive ? "mobile-route" : ""}`, children: [isMobileRouteActive ? (_jsxs(_Fragment, { children: [_jsxs("header", { className: "mobile-topbar", children: [_jsxs("div", { className: "mobile-topbar-brand", children: [_jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mobile Console" })] }), _jsxs("div", { className: "mobile-topbar-actions", children: [_jsxs("button", { type: "button", className: "action-btn ghost mobile-notify-btn", onClick: () => setNotificationWidgetOpen((prev) => !prev), children: ["\uD83D\uDD14", notificationUnread > 0 ? _jsx("span", { className: "notify-count", children: notificationUnread }) : null] }), _jsx("button", { type: "button", className: "action-btn mobile-menu-btn", onClick: () => {
+                                            setNotificationWidgetOpen(false);
+                                            setMobileMenuOpen((prev) => !prev);
+                                        }, children: "\u2630" })] })] }), notificationWidgetOpen ? (_jsxs("div", { className: "mobile-notify-panel", children: [_jsxs("div", { className: "notify-popout-head", children: [_jsx("span", { children: "Notifications" }), _jsx("button", { className: "action-btn ghost", onClick: () => markAllNotificationsRead(), children: "Read all" })] }), _jsx("div", { className: "notify-popout-list", children: notificationList.length === 0 ? (_jsx("div", { className: "muted small", children: "No notifications." })) : ([...notificationList]
                                     .sort((a, b) => {
                                     const scoreA = a.read_at ? 1 : 0;
                                     const scoreB = b.read_at ? 1 : 0;
@@ -4133,13 +4186,13 @@ export default function App() {
                                     .map((item) => (_jsxs("button", { className: `notify-item ${item.read_at ? "is-read" : "is-unread"}`, onClick: () => {
                                         if (!item.read_at)
                                             markNotificationRead(item.id);
-                                    }, children: [_jsx("span", { className: "notify-item-title", children: item.title }), _jsx("span", { className: "notify-item-body", children: item.body ?? "" })] }, `mobile-notify-${item.id}`)))) })] })) : null, _jsx("div", { className: `mobile-drawer-backdrop ${mobileMenuOpen ? "is-open" : ""}`, onClick: () => setMobileMenuOpen(false) }), _jsxs("aside", { className: `mobile-drawer ${mobileMenuOpen ? "is-open" : ""}`, children: [_jsxs("div", { className: "mobile-drawer-head", children: [_jsxs("div", { children: [_jsx("div", { className: "brand-title", children: "Navigation" }), _jsxs("div", { className: "muted small", children: ["@", user?.username ?? "user"] })] }), _jsx("button", { className: "action-btn ghost", onClick: () => setMobileMenuOpen(false), children: "Close" })] }), _jsxs("div", { className: "mobile-drawer-status", children: [_jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Queue" }), _jsx("span", { children: activeQueueItems.length })] }), _jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Jobs" }), _jsx("span", { children: activeJobs.length })] }), _jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Credits" }), _jsx("span", { children: user?.credits_balance ?? 0 })] })] }), _jsxs("nav", { className: "mobile-drawer-nav", children: [nav.map((key) => {
+                                    }, children: [_jsx("span", { className: "notify-item-title", children: item.title }), _jsx("span", { className: "notify-item-body", children: item.body ?? "" })] }, `mobile-notify-${item.id}`)))) })] })) : null, mobileMenuOpen ? (_jsxs("div", { className: "mobile-menu-panel", children: [_jsxs("div", { className: "mobile-drawer-head", children: [_jsxs("div", { children: [_jsx("div", { className: "brand-title", children: "Navigation" }), _jsxs("div", { className: "muted small", children: ["@", user?.username ?? "user"] })] }), _jsx("button", { type: "button", className: "action-btn ghost", onClick: () => setMobileMenuOpen(false), children: "Close" })] }), _jsxs("div", { className: "mobile-drawer-status", children: [_jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Queue" }), _jsx("span", { children: activeQueueItems.length })] }), _jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Jobs" }), _jsx("span", { children: activeJobs.length })] }), _jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Credits" }), _jsx("span", { children: user?.credits_balance ?? 0 })] })] }), _jsxs("nav", { className: "mobile-drawer-nav", children: [nav.map((key) => {
                                         const locked = (key === "generator" && !canGenerate) || (key === "pipeline" && !canTrain);
-                                        return (_jsx("button", { className: `mobile-nav-btn ${view === key ? "is-active" : ""}`, disabled: locked, onClick: () => setView(key), children: t[key] }, `mobile-${key}`));
-                                    }), isAdmin ? (_jsx("button", { className: `mobile-nav-btn ${view === "admin" ? "is-active" : ""}`, onClick: () => {
+                                        return (_jsx("button", { type: "button", className: `mobile-nav-btn ${view === key ? "is-active" : ""}`, disabled: locked, onClick: () => setView(key), children: t[key] }, `mobile-${key}`));
+                                    }), isAdmin ? (_jsx("button", { type: "button", className: `mobile-nav-btn ${view === "admin" ? "is-active" : ""}`, onClick: () => {
                                             setView("admin");
                                             setAdminTab("queue");
-                                        }, children: "Admin Settings" })) : null] }), _jsx("div", { className: "mobile-drawer-foot", children: _jsxs("div", { className: "lang-switch", children: [_jsx("button", { onClick: () => setLang("en"), children: "EN" }), _jsx("button", { onClick: () => setLang("de"), children: "DE" })] }) })] })] })) : null, _jsxs("aside", { className: "rail", children: [_jsxs("div", { className: "brand", children: [_jsx("div", { className: "logo", children: "FX" }), _jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mjolnir Console" })] }), _jsx("nav", { className: "rail-nav", children: nav.map((key) => {
+                                        }, children: "Admin Settings" })) : null] }), _jsx("div", { className: "mobile-drawer-foot", children: _jsxs("div", { className: "lang-switch", children: [_jsx("button", { type: "button", onClick: () => setLang("en"), children: "EN" }), _jsx("button", { type: "button", onClick: () => setLang("de"), children: "DE" })] }) })] })) : null] })) : null, _jsxs("aside", { className: "rail", children: [_jsxs("div", { className: "brand", children: [_jsx("div", { className: "logo", children: _jsx("img", { src: "/logo.png", alt: "FrameWorkX logo", loading: "eager", decoding: "async" }) }), _jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mjolnir Console" })] }), _jsx("nav", { className: "rail-nav", children: nav.map((key) => {
                             const locked = (key === "generator" && !canGenerate) || (key === "pipeline" && !canTrain);
                             return (_jsx("button", { className: `rail-btn ${view === key ? "is-active" : ""} ${locked ? "is-disabled" : ""}`, onClick: () => {
                                     if (locked)

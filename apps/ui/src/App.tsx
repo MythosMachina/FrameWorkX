@@ -895,8 +895,53 @@ function expandWildcardPromptPreview(prompt: string, lists: WildcardList[], mode
 
 const MOBILE_ROUTE_PATH = "/m";
 
+const VIEW_SEGMENT_MAP: Record<AppView, string> = {
+  dashboard: "",
+  pipeline: "trainer",
+  generator: "generator",
+  gallery: "gallery",
+  lora: "lora",
+  messages: "messages",
+  settings: "settings",
+  admin: "admin",
+  profile: "profile"
+};
+
+const SEGMENT_VIEW_MAP: Record<string, AppView> = {
+  "": "dashboard",
+  trainer: "pipeline",
+  generator: "generator",
+  gallery: "gallery",
+  lora: "lora",
+  messages: "messages",
+  settings: "settings",
+  admin: "admin",
+  profile: "profile"
+};
+
 function isMobileRoute(pathname: string) {
   return pathname === MOBILE_ROUTE_PATH || pathname.startsWith(`${MOBILE_ROUTE_PATH}/`);
+}
+
+function normalizePathname(pathname: string) {
+  if (!pathname) return "/";
+  if (pathname.length > 1 && pathname.endsWith("/")) return pathname.replace(/\/+$/, "");
+  return pathname;
+}
+
+function getViewFromPathname(pathname: string): AppView {
+  const normalized = normalizePathname(pathname);
+  const mobile = isMobileRoute(normalized);
+  const withoutMobile = mobile ? normalized.replace(/^\/m(?=\/|$)/, "") || "/" : normalized;
+  const segment = withoutMobile.split("/").filter(Boolean)[0] ?? "";
+  return SEGMENT_VIEW_MAP[segment] ?? "dashboard";
+}
+
+function getPathForView(view: AppView, mobile: boolean) {
+  const base = mobile ? MOBILE_ROUTE_PATH : "";
+  const segment = VIEW_SEGMENT_MAP[view] ?? "";
+  if (!segment) return base || "/";
+  return `${base}/${segment}`;
 }
 
 function detectMobileClient() {
@@ -936,7 +981,9 @@ export default function App() {
   );
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileShowCompletedJobs, setMobileShowCompletedJobs] = useState(false);
-  const [view, setView] = useState<AppView>("dashboard");
+  const [view, setView] = useState<AppView>(
+    typeof window !== "undefined" ? getViewFromPathname(window.location.pathname) : "dashboard"
+  );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
   const [lang, setLang] = useState<Lang>(() => getInitialLang());
   const [token, setAuthToken] = useState<string>(getToken());
@@ -1443,17 +1490,24 @@ export default function App() {
     if (typeof window === "undefined") return;
     const syncRoute = () => {
       setIsMobileRouteActive(isMobileRoute(window.location.pathname));
+      setView(getViewFromPathname(window.location.pathname));
     };
     const mobileClient = detectMobileClient();
     if (mobileClient && window.location.pathname === "/") {
       window.history.replaceState({}, "", MOBILE_ROUTE_PATH);
-      setIsMobileRouteActive(true);
-    } else {
-      syncRoute();
     }
+    syncRoute();
     window.addEventListener("popstate", syncRoute);
     return () => window.removeEventListener("popstate", syncRoute);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !token) return;
+    const targetPath = getPathForView(view, isMobileRouteActive);
+    const currentPath = normalizePathname(window.location.pathname);
+    if (currentPath === targetPath) return;
+    window.history.pushState({}, "", `${targetPath}${window.location.search}${window.location.hash}`);
+  }, [view, isMobileRouteActive, token]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -4304,9 +4358,8 @@ export default function App() {
       <div className={`app-shell public-shell ${isMobileRouteActive ? "mobile-route" : ""}`}>
         <div className="main">
           <header className="topbar">
-            <div>
-              <div className="brand-title">FrameWorkX</div>
-              <div className="brand-subtitle">Mjolnir Console</div>
+            <div className="public-topbar-logo">
+              <img src="/logo.png" alt="FrameWorkX" loading="eager" decoding="async" />
             </div>
             <div className="top-actions">
               <button className="action-btn ghost" onClick={() => setLoginOpen(true)}>
@@ -5077,11 +5130,22 @@ export default function App() {
               <div className="brand-subtitle">Mobile Console</div>
             </div>
             <div className="mobile-topbar-actions">
-              <button className="action-btn ghost mobile-notify-btn" onClick={() => setNotificationWidgetOpen((prev) => !prev)}>
+              <button
+                type="button"
+                className="action-btn ghost mobile-notify-btn"
+                onClick={() => setNotificationWidgetOpen((prev) => !prev)}
+              >
                 🔔
                 {notificationUnread > 0 ? <span className="notify-count">{notificationUnread}</span> : null}
               </button>
-              <button className="action-btn mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>
+              <button
+                type="button"
+                className="action-btn mobile-menu-btn"
+                onClick={() => {
+                  setNotificationWidgetOpen(false);
+                  setMobileMenuOpen((prev) => !prev);
+                }}
+              >
                 ☰
               </button>
             </div>
@@ -5122,72 +5186,74 @@ export default function App() {
               </div>
             </div>
           ) : null}
-          <div
-            className={`mobile-drawer-backdrop ${mobileMenuOpen ? "is-open" : ""}`}
-            onClick={() => setMobileMenuOpen(false)}
-          />
-          <aside className={`mobile-drawer ${mobileMenuOpen ? "is-open" : ""}`}>
-            <div className="mobile-drawer-head">
-              <div>
-                <div className="brand-title">Navigation</div>
-                <div className="muted small">@{user?.username ?? "user"}</div>
-              </div>
-              <button className="action-btn ghost" onClick={() => setMobileMenuOpen(false)}>
-                Close
-              </button>
-            </div>
-            <div className="mobile-drawer-status">
-              <div className="stat-row">
-                <span>Queue</span>
-                <span>{activeQueueItems.length}</span>
-              </div>
-              <div className="stat-row">
-                <span>Jobs</span>
-                <span>{activeJobs.length}</span>
-              </div>
-              <div className="stat-row">
-                <span>Credits</span>
-                <span>{user?.credits_balance ?? 0}</span>
-              </div>
-            </div>
-            <nav className="mobile-drawer-nav">
-              {nav.map((key) => {
-                const locked = (key === "generator" && !canGenerate) || (key === "pipeline" && !canTrain);
-                return (
-                  <button
-                    key={`mobile-${key}`}
-                    className={`mobile-nav-btn ${view === key ? "is-active" : ""}`}
-                    disabled={locked}
-                    onClick={() => setView(key)}
-                  >
-                    {t[key]}
-                  </button>
-                );
-              })}
-              {isAdmin ? (
-                <button
-                  className={`mobile-nav-btn ${view === "admin" ? "is-active" : ""}`}
-                  onClick={() => {
-                    setView("admin");
-                    setAdminTab("queue");
-                  }}
-                >
-                  Admin Settings
+          {mobileMenuOpen ? (
+            <div className="mobile-menu-panel">
+              <div className="mobile-drawer-head">
+                <div>
+                  <div className="brand-title">Navigation</div>
+                  <div className="muted small">@{user?.username ?? "user"}</div>
+                </div>
+                <button type="button" className="action-btn ghost" onClick={() => setMobileMenuOpen(false)}>
+                  Close
                 </button>
-              ) : null}
-            </nav>
-            <div className="mobile-drawer-foot">
-              <div className="lang-switch">
-                <button onClick={() => setLang("en")}>EN</button>
-                <button onClick={() => setLang("de")}>DE</button>
+              </div>
+              <div className="mobile-drawer-status">
+                <div className="stat-row">
+                  <span>Queue</span>
+                  <span>{activeQueueItems.length}</span>
+                </div>
+                <div className="stat-row">
+                  <span>Jobs</span>
+                  <span>{activeJobs.length}</span>
+                </div>
+                <div className="stat-row">
+                  <span>Credits</span>
+                  <span>{user?.credits_balance ?? 0}</span>
+                </div>
+              </div>
+              <nav className="mobile-drawer-nav">
+                {nav.map((key) => {
+                  const locked = (key === "generator" && !canGenerate) || (key === "pipeline" && !canTrain);
+                  return (
+                    <button
+                      key={`mobile-${key}`}
+                      type="button"
+                      className={`mobile-nav-btn ${view === key ? "is-active" : ""}`}
+                      disabled={locked}
+                      onClick={() => setView(key)}
+                    >
+                      {t[key]}
+                    </button>
+                  );
+                })}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    className={`mobile-nav-btn ${view === "admin" ? "is-active" : ""}`}
+                    onClick={() => {
+                      setView("admin");
+                      setAdminTab("queue");
+                    }}
+                  >
+                    Admin Settings
+                  </button>
+                ) : null}
+              </nav>
+              <div className="mobile-drawer-foot">
+                <div className="lang-switch">
+                  <button type="button" onClick={() => setLang("en")}>EN</button>
+                  <button type="button" onClick={() => setLang("de")}>DE</button>
+                </div>
               </div>
             </div>
-          </aside>
+          ) : null}
         </>
       ) : null}
       <aside className="rail">
         <div className="brand">
-          <div className="logo">FX</div>
+          <div className="logo">
+            <img src="/logo.png" alt="FrameWorkX logo" loading="eager" decoding="async" />
+          </div>
           <div className="brand-title">FrameWorkX</div>
           <div className="brand-subtitle">Mjolnir Console</div>
         </div>

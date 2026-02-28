@@ -113,6 +113,22 @@ body.mobile-route {
   gap: 8px;
 }
 
+.mobile-menu-panel {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: 66px;
+  z-index: 39;
+  border: 1px solid rgba(210, 161, 95, 0.24);
+  background: linear-gradient(180deg, rgba(37, 26, 17, 0.98), rgba(22, 16, 12, 0.98));
+  max-height: calc(100vh - 74px);
+  overflow: auto;
+  padding: 8px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 10px;
+}
+
 .mobile-menu-btn,
 .mobile-notify-btn {
   min-width: 44px;
@@ -352,17 +368,18 @@ body.mobile-route {
 }
 
 .logo {
-  width: 54px;
-  height: 54px;
-  border-radius: 14px;
-  border: 2px solid var(--brass);
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  letter-spacing: 2px;
-  color: var(--brass);
-  background: radial-gradient(circle, rgba(199, 123, 58, 0.4), rgba(27, 19, 12, 0.9));
-  box-shadow: 0 0 18px var(--glow);
+  width: min(100%, 180px);
+  border-radius: 10px;
+  border: 1px solid rgba(199, 123, 58, 0.28);
+  background: rgba(14, 10, 8, 0.6);
+  padding: 4px;
+}
+
+.logo img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
 }
 
 .brand-title {
@@ -500,6 +517,25 @@ body.mobile-route {
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+.public-topbar-logo {
+  width: clamp(130px, 14vw, 180px);
+  border-radius: 10px;
+  border: 1px solid rgba(199, 123, 58, 0.22);
+  background: rgba(14, 10, 8, 0.55);
+  padding: 3px;
+}
+
+.public-topbar-logo img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+}
+
+.app-shell.public-shell .topbar {
+  padding: 12px 20px;
 }
 
 .top-actions {
