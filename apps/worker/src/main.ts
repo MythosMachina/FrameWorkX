@@ -30,6 +30,7 @@ const PIPELINE_STEPS = [
 ];
 
 const TRAINING_STEPS = ["train_pre", "train_phase", "finishing"];
+const ACTIVE_TRAINING_STATUSES = ["credit_pending", "queued", "running"];
 
 type GpuMemorySnapshot = {
   usedMb: number;
@@ -445,7 +446,10 @@ async function processReservePipelineIntent(client: any, intent: any) {
     return;
   }
   const [trainingRef] = (
-    await client.query("SELECT id FROM training.runs WHERE pipeline_run_id = $1 LIMIT 1", [run.id])
+    await client.query(
+      "SELECT id FROM training.runs WHERE pipeline_run_id = $1 AND status = ANY($2::text[]) LIMIT 1",
+      [run.id, ACTIVE_TRAINING_STATUSES]
+    )
   ).rows;
   if (trainingRef) {
     await markCreditIntent(client, intent.id, "done");
@@ -820,8 +824,8 @@ async function releasePipelineCredits(run: any, reason: string) {
   const reserved = Number(flags.creditsReserved ?? 0);
   if (!reserved) return;
   const [trainingRef] = await query<{ id: string }>(
-    "SELECT id FROM training.runs WHERE pipeline_run_id = $1 LIMIT 1",
-    [run.id]
+    "SELECT id FROM training.runs WHERE pipeline_run_id = $1 AND status = ANY($2::text[]) LIMIT 1",
+    [run.id, ACTIVE_TRAINING_STATUSES]
   );
   if (trainingRef) return;
   await enqueueCreditIntent({
@@ -846,8 +850,8 @@ async function reconcileReservedCredits() {
   );
   for (const row of pipelineRows) {
     const [training] = await query<{ id: string }>(
-      "SELECT id FROM training.runs WHERE pipeline_run_id = $1 LIMIT 1",
-      [row.id]
+      "SELECT id FROM training.runs WHERE pipeline_run_id = $1 AND status = ANY($2::text[]) LIMIT 1",
+      [row.id, ACTIVE_TRAINING_STATUSES]
     );
     if (training) continue;
     const reserved = Number(row.credits_reserved ?? 0);
@@ -962,8 +966,8 @@ async function ensureTrainingRunFromPipeline(run: any) {
     return;
   }
   const [existing] = await query<{ id: string }>(
-    "SELECT id FROM training.runs WHERE dataset_id = $1 LIMIT 1",
-    [dataset.id]
+    "SELECT id FROM training.runs WHERE dataset_id = $1 AND status = ANY($2::text[]) LIMIT 1",
+    [dataset.id, ACTIVE_TRAINING_STATUSES]
   );
   if (existing) return;
   const baseModelId = flags.baseModelId ? String(flags.baseModelId) : await resolveTrainingBaseModelId();
@@ -1012,6 +1016,16 @@ async function ensureTrainingRunFromPipeline(run: any) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const [activeRun] = (
+      await client.query(
+        "SELECT id FROM training.runs WHERE dataset_id = $1 AND status = ANY($2::text[]) LIMIT 1 FOR UPDATE",
+        [dataset.id, ACTIVE_TRAINING_STATUSES]
+      )
+    ).rows;
+    if (activeRun) {
+      await client.query("COMMIT");
+      return;
+    }
     const trainingRunId = randomUUID();
     if (pipelineReserved > 0) {
       await client.query(
@@ -1051,6 +1065,9 @@ async function ensureTrainingRunFromPipeline(run: any) {
     await updatePipelineStatus(run.id, pipelineReserved > 0 ? undefined : "credit_pending");
   } catch (err) {
     await client.query("ROLLBACK");
+    if ((err as any)?.code === "23505") {
+      return;
+    }
     throw err;
   } finally {
     client.release();

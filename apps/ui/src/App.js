@@ -516,6 +516,8 @@ function getInitialLang() {
 }
 export default function App() {
     const [isMobileRouteActive, setIsMobileRouteActive] = useState(typeof window !== "undefined" ? isMobileRoute(window.location.pathname) : false);
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [mobileShowCompletedJobs, setMobileShowCompletedJobs] = useState(false);
     const [view, setView] = useState("dashboard");
     const [settingsTab, setSettingsTab] = useState("profile");
     const [lang, setLang] = useState(() => getInitialLang());
@@ -1798,6 +1800,72 @@ export default function App() {
         const steps = run.steps ?? {};
         return ["running", "failed"].includes(String(steps.finishing ?? "")) || (run.status === "completed" && steps.finishing);
     }), [dashboardTraining]);
+    const mobileDashboardJobs = useMemo(() => {
+        const rows = [];
+        for (const run of dashboardTraining) {
+            const steps = run.steps ?? {};
+            const phase = steps.finishing === "running" || steps.finishing === "failed" || run.status === "completed"
+                ? "finishing"
+                : steps.train_phase === "running" || steps.train_phase === "failed" || run.status === "running"
+                    ? "train"
+                    : "train_pre";
+            const progress = typeof run.progress_pct === "number" ? Math.max(0, Math.min(100, run.progress_pct)) : null;
+            rows.push({
+                id: run.id,
+                name: run.name ?? run.id,
+                kind: "training",
+                phase,
+                status: String(run.status ?? ""),
+                meta: [
+                    run.image_count != null ? `${run.image_count} imgs` : "",
+                    run.eta_seconds != null ? `ETA ${run.eta_seconds}s` : "",
+                    run.last_loss != null ? `loss ${Number(run.last_loss).toFixed(4)}` : ""
+                ].filter(Boolean),
+                progressPct: progress
+            });
+        }
+        for (const run of dashboardPipeline) {
+            if (rows.some((item) => item.id === run.id))
+                continue;
+            const progress = typeof run.progress_pct === "number" ? Math.max(0, Math.min(100, run.progress_pct)) : null;
+            rows.push({
+                id: run.id,
+                name: run.name ?? run.id,
+                kind: "pipeline",
+                phase: "prep",
+                status: String(run.status ?? ""),
+                meta: [
+                    run.image_count != null ? `${run.image_count} imgs` : "",
+                    run.eta_seconds != null ? `ETA ${run.eta_seconds}s` : "",
+                    run.last_step ? run.last_step : ""
+                ].filter(Boolean),
+                progressPct: progress
+            });
+        }
+        const rank = (status) => {
+            if (status === "running")
+                return 0;
+            if (status === "queued" || status === "queued_initiated" || status === "manual_tagging" || status === "ready_to_train") {
+                return 1;
+            }
+            if (status === "failed")
+                return 2;
+            return 3;
+        };
+        const visibleRows = rows.filter((row) => {
+            if (mobileShowCompletedJobs)
+                return true;
+            return !["completed", "cancelled", "stopped"].includes(row.status);
+        });
+        return visibleRows.sort((a, b) => rank(a.status) - rank(b.status));
+    }, [dashboardTraining, dashboardPipeline, mobileShowCompletedJobs]);
+    const mobileCompletedJobsCount = useMemo(() => {
+        const allRows = [
+            ...dashboardTraining.map((run) => String(run.status ?? "")),
+            ...dashboardPipeline.map((run) => String(run.status ?? ""))
+        ];
+        return allRows.filter((status) => ["completed", "cancelled", "stopped"].includes(status)).length;
+    }, [dashboardTraining, dashboardPipeline]);
     const openDashboardModal = (kind, id, phase) => {
         if (!token)
             return;
@@ -1878,6 +1946,11 @@ export default function App() {
                 .catch(() => null);
         }
     };
+    useEffect(() => {
+        if (!isMobileRouteActive || !mobileMenuOpen)
+            return;
+        setMobileMenuOpen(false);
+    }, [view, isMobileRouteActive, mobileMenuOpen]);
     useEffect(() => {
         if (!dashboardModalOpen || !dashboardModalId || !token)
             return;
@@ -3138,6 +3211,25 @@ export default function App() {
             .then(() => refreshTrainingRuns())
             .catch(() => null);
     };
+    const retryTrainingRun = (runId) => {
+        if (!token)
+            return;
+        fetch(`/api/training/runs/${runId}/retry`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` }
+        })
+            .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => ({})) }))
+            .then(({ ok, data }) => {
+            if (!ok) {
+                setDashboardQueueMsg(humanizeErrorCode(data?.error ?? "retry_failed"));
+            }
+            refreshTrainingRuns();
+            refreshDashboardOverview();
+        })
+            .catch(() => {
+            setDashboardQueueMsg("Retry failed.");
+        });
+    };
     const deleteTrainingRun = (runId) => {
         if (!token)
             return;
@@ -4029,7 +4121,25 @@ export default function App() {
         })
             .catch(() => null);
     };
-    return (_jsxs("div", { className: `app-shell ${isMobileRouteActive ? "mobile-route" : ""}`, children: [_jsxs("aside", { className: "rail", children: [_jsxs("div", { className: "brand", children: [_jsx("div", { className: "logo", children: "FX" }), _jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mjolnir Console" })] }), _jsx("nav", { className: "rail-nav", children: nav.map((key) => {
+    return (_jsxs("div", { className: `app-shell ${isMobileRouteActive ? "mobile-route" : ""}`, children: [isMobileRouteActive ? (_jsxs(_Fragment, { children: [_jsxs("header", { className: "mobile-topbar", children: [_jsxs("div", { className: "mobile-topbar-brand", children: [_jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mobile Console" })] }), _jsxs("div", { className: "mobile-topbar-actions", children: [_jsxs("button", { className: "action-btn ghost mobile-notify-btn", onClick: () => setNotificationWidgetOpen((prev) => !prev), children: ["\uD83D\uDD14", notificationUnread > 0 ? _jsx("span", { className: "notify-count", children: notificationUnread }) : null] }), _jsx("button", { className: "action-btn mobile-menu-btn", onClick: () => setMobileMenuOpen(true), children: "\u2630" })] })] }), notificationWidgetOpen ? (_jsxs("div", { className: "mobile-notify-panel", children: [_jsxs("div", { className: "notify-popout-head", children: [_jsx("span", { children: "Notifications" }), _jsx("button", { className: "action-btn ghost", onClick: () => markAllNotificationsRead(), children: "Read all" })] }), _jsx("div", { className: "notify-popout-list", children: notificationList.length === 0 ? (_jsx("div", { className: "muted small", children: "No notifications." })) : ([...notificationList]
+                                    .sort((a, b) => {
+                                    const scoreA = a.read_at ? 1 : 0;
+                                    const scoreB = b.read_at ? 1 : 0;
+                                    if (scoreA !== scoreB)
+                                        return scoreA - scoreB;
+                                    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                                })
+                                    .slice(0, 8)
+                                    .map((item) => (_jsxs("button", { className: `notify-item ${item.read_at ? "is-read" : "is-unread"}`, onClick: () => {
+                                        if (!item.read_at)
+                                            markNotificationRead(item.id);
+                                    }, children: [_jsx("span", { className: "notify-item-title", children: item.title }), _jsx("span", { className: "notify-item-body", children: item.body ?? "" })] }, `mobile-notify-${item.id}`)))) })] })) : null, _jsx("div", { className: `mobile-drawer-backdrop ${mobileMenuOpen ? "is-open" : ""}`, onClick: () => setMobileMenuOpen(false) }), _jsxs("aside", { className: `mobile-drawer ${mobileMenuOpen ? "is-open" : ""}`, children: [_jsxs("div", { className: "mobile-drawer-head", children: [_jsxs("div", { children: [_jsx("div", { className: "brand-title", children: "Navigation" }), _jsxs("div", { className: "muted small", children: ["@", user?.username ?? "user"] })] }), _jsx("button", { className: "action-btn ghost", onClick: () => setMobileMenuOpen(false), children: "Close" })] }), _jsxs("div", { className: "mobile-drawer-status", children: [_jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Queue" }), _jsx("span", { children: activeQueueItems.length })] }), _jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Jobs" }), _jsx("span", { children: activeJobs.length })] }), _jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Credits" }), _jsx("span", { children: user?.credits_balance ?? 0 })] })] }), _jsxs("nav", { className: "mobile-drawer-nav", children: [nav.map((key) => {
+                                        const locked = (key === "generator" && !canGenerate) || (key === "pipeline" && !canTrain);
+                                        return (_jsx("button", { className: `mobile-nav-btn ${view === key ? "is-active" : ""}`, disabled: locked, onClick: () => setView(key), children: t[key] }, `mobile-${key}`));
+                                    }), isAdmin ? (_jsx("button", { className: `mobile-nav-btn ${view === "admin" ? "is-active" : ""}`, onClick: () => {
+                                            setView("admin");
+                                            setAdminTab("queue");
+                                        }, children: "Admin Settings" })) : null] }), _jsx("div", { className: "mobile-drawer-foot", children: _jsxs("div", { className: "lang-switch", children: [_jsx("button", { onClick: () => setLang("en"), children: "EN" }), _jsx("button", { onClick: () => setLang("de"), children: "DE" })] }) })] })] })) : null, _jsxs("aside", { className: "rail", children: [_jsxs("div", { className: "brand", children: [_jsx("div", { className: "logo", children: "FX" }), _jsx("div", { className: "brand-title", children: "FrameWorkX" }), _jsx("div", { className: "brand-subtitle", children: "Mjolnir Console" })] }), _jsx("nav", { className: "rail-nav", children: nav.map((key) => {
                             const locked = (key === "generator" && !canGenerate) || (key === "pipeline" && !canTrain);
                             return (_jsx("button", { className: `rail-btn ${view === key ? "is-active" : ""} ${locked ? "is-disabled" : ""}`, onClick: () => {
                                     if (locked)
@@ -4059,7 +4169,9 @@ export default function App() {
                                                             }, children: [_jsx("span", { className: "notify-item-title", children: item.title }), _jsx("span", { className: "notify-item-body", children: item.body ?? "" })] }, item.id)))) }), _jsx("div", { className: "notify-popout-foot", children: _jsx("button", { className: "action-btn ghost", onClick: () => {
                                                                 setView("settings");
                                                                 setNotificationWidgetOpen(false);
-                                                            }, children: "Open Notification Center" }) })] })) : null] }), _jsxs("div", { className: "lang-switch", children: [_jsx("button", { onClick: () => setLang("en"), children: "EN" }), _jsx("button", { onClick: () => setLang("de"), children: "DE" })] })] })] }), _jsxs("main", { className: "content", children: [_jsxs("section", { className: `view ${view === "dashboard" ? "is-active" : ""}`, children: [_jsxs("div", { className: "view-header", children: [_jsx("h1", { children: t.commandDeck }), _jsx("p", { children: t.queue })] }), _jsxs("div", { className: "dashboard-grid", children: [_jsxs("section", { className: "panel task-column", children: [_jsxs("div", { className: "panel-header", children: [_jsx("h3", { children: "Tasks" }), _jsx("span", { className: "badge", children: "Queue" })] }), _jsxs("div", { className: "task-group", children: [_jsxs("div", { className: "mini-header", children: [_jsx("span", { children: "Active training" }), _jsx("span", { className: "badge", children: "Live" })] }), dashboardTraining.filter((run) => run.status === "running").length === 0 ? (_jsx("div", { className: "muted small", children: "No active training." })) : (dashboardTraining
+                                                            }, children: "Open Notification Center" }) })] })) : null] }), _jsxs("div", { className: "lang-switch", children: [_jsx("button", { onClick: () => setLang("en"), children: "EN" }), _jsx("button", { onClick: () => setLang("de"), children: "DE" })] })] })] }), _jsxs("main", { className: "content", children: [_jsxs("section", { className: `view ${view === "dashboard" ? "is-active" : ""}`, children: [_jsxs("div", { className: "view-header", children: [_jsx("h1", { children: t.commandDeck }), _jsx("p", { children: t.queue })] }), isMobileRouteActive ? (_jsxs("div", { className: "mobile-command-deck", children: [_jsxs("div", { className: "mobile-command-stats", children: [_jsxs("div", { className: "mobile-stat-card", children: [_jsx("span", { children: "Running" }), _jsx("strong", { children: mobileDashboardJobs.filter((row) => row.status === "running").length })] }), _jsxs("div", { className: "mobile-stat-card", children: [_jsx("span", { children: "Queued" }), _jsx("strong", { children: mobileDashboardJobs.filter((row) => ["queued", "queued_initiated", "ready_to_train", "manual_tagging"].includes(row.status)).length })] }), _jsxs("div", { className: "mobile-stat-card", children: [_jsx("span", { children: "Failed" }), _jsx("strong", { children: mobileDashboardJobs.filter((row) => row.status === "failed").length })] }), _jsxs("div", { className: "mobile-stat-card", children: [_jsx("span", { children: "Train" }), _jsx("strong", { children: dashboardTraining.filter((run) => run.status === "running").length })] })] }), _jsxs("div", { className: "mobile-job-list", children: [mobileDashboardJobs.length === 0 ? (_jsx("div", { className: "muted small", children: "No jobs." })) : (mobileDashboardJobs.map((row) => (_jsxs("button", { className: `mobile-job-card is-${row.status}`, onClick: () => openDashboardModal(row.kind, row.id, row.phase), children: [_jsxs("div", { className: "mobile-job-top", children: [_jsx("div", { className: "mobile-job-title", children: row.name }), _jsx("span", { className: "badge", children: row.status })] }), _jsx("div", { className: "mobile-job-id", children: row.id }), row.progressPct != null ? (_jsx("div", { className: "progress", children: _jsx("span", { style: { width: `${row.progressPct}%` } }) })) : null, _jsx("div", { className: "mobile-job-meta", children: row.meta.join(" • ") || row.phase })] }, `mobile-job-${row.kind}-${row.id}`)))), mobileCompletedJobsCount > 0 ? (_jsx("button", { className: "action-btn ghost mobile-show-completed-btn", onClick: () => setMobileShowCompletedJobs((prev) => !prev), children: mobileShowCompletedJobs
+                                                            ? "Hide completed jobs"
+                                                            : `Show completed jobs (${mobileCompletedJobsCount})` })) : null] })] })) : null, _jsxs("div", { className: "dashboard-grid", children: [_jsxs("section", { className: "panel task-column", children: [_jsxs("div", { className: "panel-header", children: [_jsx("h3", { children: "Tasks" }), _jsx("span", { className: "badge", children: "Queue" })] }), _jsxs("div", { className: "task-group", children: [_jsxs("div", { className: "mini-header", children: [_jsx("span", { children: "Active training" }), _jsx("span", { className: "badge", children: "Live" })] }), dashboardTraining.filter((run) => run.status === "running").length === 0 ? (_jsx("div", { className: "muted small", children: "No active training." })) : (dashboardTraining
                                                                 .filter((run) => run.status === "running")
                                                                 .map((run) => (_jsxs("button", { className: "task-row active-row", onClick: () => openDashboardModal("training", run.id, "train"), children: [_jsx("span", { children: run.name ?? run.id }), _jsx("span", { children: run.status })] }, run.id))))] }), _jsxs("div", { className: "task-group", children: [_jsxs("div", { className: "mini-header", children: [_jsx("span", { children: "Queue" }), _jsx("span", { className: "badge", children: "Pipeline" })] }), dashboardQueueMsg ? _jsx("div", { className: "muted small", children: dashboardQueueMsg }) : null, dashboardQueue.length === 0 ? (_jsx("div", { className: "muted small", children: "Queue empty." })) : (dashboardQueue.map((item) => (_jsxs("div", { className: "task-row-wrap", children: [_jsxs("button", { className: "task-row", onClick: () => item.item_type === "training"
                                                                             ? openDashboardModal("training", item.id, "train_pre")
@@ -4095,7 +4207,10 @@ export default function App() {
                                                                                                         }, children: "Delete" })] })) : (_jsxs(_Fragment, { children: [_jsx("button", { className: "action-btn ghost", disabled: ["running", "removing"].includes(String(dashboardModalData?.status ?? "")), onClick: () => {
                                                                                                             if (dashboardModalData?.id)
                                                                                                                 cancelTrainingRun(dashboardModalData.id);
-                                                                                                        }, children: "Stop" }), _jsx("button", { className: "action-btn danger", disabled: ["running", "removing"].includes(String(dashboardModalData?.status ?? "")), onClick: () => {
+                                                                                                        }, children: "Stop" }), _jsx("button", { className: "action-btn", disabled: !["failed", "cancelled", "stopped", "completed", "remove_failed"].includes(String(dashboardModalData?.status ?? "")), onClick: () => {
+                                                                                                            if (dashboardModalData?.id)
+                                                                                                                retryTrainingRun(dashboardModalData.id);
+                                                                                                        }, children: "Retry" }), _jsx("button", { className: "action-btn danger", disabled: ["running", "removing"].includes(String(dashboardModalData?.status ?? "")), onClick: () => {
                                                                                                             if (dashboardModalData?.id)
                                                                                                                 deleteTrainingRun(dashboardModalData.id);
                                                                                                         }, children: "Delete" })] })) })] }), (dashboardModalData?.error_message || dashboardModalEvents.length > 0) ? (_jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Error log" }), _jsx("button", { className: "info-btn", onClick: () => setDashboardErrorOpen(true), title: "Show error log", children: "I" })] })) : null, dashboardModalKind === "pipeline" && dashboardModalData?.status === "manual_tagging" ? (_jsxs("div", { className: "stat-row", children: [_jsx("span", { children: "Manual tagging" }), _jsx("button", { className: "action-btn", onClick: () => {

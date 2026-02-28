@@ -934,6 +934,8 @@ export default function App() {
   const [isMobileRouteActive, setIsMobileRouteActive] = useState(
     typeof window !== "undefined" ? isMobileRoute(window.location.pathname) : false
   );
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileShowCompletedJobs, setMobileShowCompletedJobs] = useState(false);
   const [view, setView] = useState<AppView>("dashboard");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
   const [lang, setLang] = useState<Lang>(() => getInitialLang());
@@ -2304,6 +2306,77 @@ export default function App() {
       }),
     [dashboardTraining]
   );
+  const mobileDashboardJobs = useMemo(() => {
+    const rows: Array<{
+      id: string;
+      name: string;
+      kind: "pipeline" | "training";
+      phase: "prep" | "train_pre" | "train" | "finishing";
+      status: string;
+      meta: string[];
+      progressPct: number | null;
+    }> = [];
+    for (const run of dashboardTraining) {
+      const steps = run.steps ?? {};
+      const phase: "train_pre" | "train" | "finishing" =
+        steps.finishing === "running" || steps.finishing === "failed" || run.status === "completed"
+          ? "finishing"
+          : steps.train_phase === "running" || steps.train_phase === "failed" || run.status === "running"
+            ? "train"
+            : "train_pre";
+      const progress = typeof run.progress_pct === "number" ? Math.max(0, Math.min(100, run.progress_pct)) : null;
+      rows.push({
+        id: run.id,
+        name: run.name ?? run.id,
+        kind: "training",
+        phase,
+        status: String(run.status ?? ""),
+        meta: [
+          run.image_count != null ? `${run.image_count} imgs` : "",
+          run.eta_seconds != null ? `ETA ${run.eta_seconds}s` : "",
+          run.last_loss != null ? `loss ${Number(run.last_loss).toFixed(4)}` : ""
+        ].filter(Boolean),
+        progressPct: progress
+      });
+    }
+    for (const run of dashboardPipeline) {
+      if (rows.some((item) => item.id === run.id)) continue;
+      const progress = typeof run.progress_pct === "number" ? Math.max(0, Math.min(100, run.progress_pct)) : null;
+      rows.push({
+        id: run.id,
+        name: run.name ?? run.id,
+        kind: "pipeline",
+        phase: "prep",
+        status: String(run.status ?? ""),
+        meta: [
+          run.image_count != null ? `${run.image_count} imgs` : "",
+          run.eta_seconds != null ? `ETA ${run.eta_seconds}s` : "",
+          run.last_step ? run.last_step : ""
+        ].filter(Boolean),
+        progressPct: progress
+      });
+    }
+    const rank = (status: string) => {
+      if (status === "running") return 0;
+      if (status === "queued" || status === "queued_initiated" || status === "manual_tagging" || status === "ready_to_train") {
+        return 1;
+      }
+      if (status === "failed") return 2;
+      return 3;
+    };
+    const visibleRows = rows.filter((row) => {
+      if (mobileShowCompletedJobs) return true;
+      return !["completed", "cancelled", "stopped"].includes(row.status);
+    });
+    return visibleRows.sort((a, b) => rank(a.status) - rank(b.status));
+  }, [dashboardTraining, dashboardPipeline, mobileShowCompletedJobs]);
+  const mobileCompletedJobsCount = useMemo(() => {
+    const allRows = [
+      ...dashboardTraining.map((run) => String(run.status ?? "")),
+      ...dashboardPipeline.map((run) => String(run.status ?? ""))
+    ];
+    return allRows.filter((status) => ["completed", "cancelled", "stopped"].includes(status)).length;
+  }, [dashboardTraining, dashboardPipeline]);
 
   const openDashboardModal = (kind: "pipeline" | "training", id: string, phase: "prep" | "train_pre" | "train" | "finishing") => {
     if (!token) return;
@@ -2388,6 +2461,10 @@ export default function App() {
         .catch(() => null);
     }
   };
+  useEffect(() => {
+    if (!isMobileRouteActive || !mobileMenuOpen) return;
+    setMobileMenuOpen(false);
+  }, [view, isMobileRouteActive, mobileMenuOpen]);
 
   useEffect(() => {
     if (!dashboardModalOpen || !dashboardModalId || !token) return;
@@ -3656,6 +3733,25 @@ export default function App() {
     })
       .then(() => refreshTrainingRuns())
       .catch(() => null);
+  };
+
+  const retryTrainingRun = (runId: string) => {
+    if (!token) return;
+    fetch(`/api/training/runs/${runId}/retry`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => ({})) }))
+      .then(({ ok, data }) => {
+        if (!ok) {
+          setDashboardQueueMsg(humanizeErrorCode(data?.error ?? "retry_failed"));
+        }
+        refreshTrainingRuns();
+        refreshDashboardOverview();
+      })
+      .catch(() => {
+        setDashboardQueueMsg("Retry failed.");
+      });
   };
 
   const deleteTrainingRun = (runId: string) => {
@@ -4973,6 +5069,122 @@ export default function App() {
 
   return (
     <div className={`app-shell ${isMobileRouteActive ? "mobile-route" : ""}`}>
+      {isMobileRouteActive ? (
+        <>
+          <header className="mobile-topbar">
+            <div className="mobile-topbar-brand">
+              <div className="brand-title">FrameWorkX</div>
+              <div className="brand-subtitle">Mobile Console</div>
+            </div>
+            <div className="mobile-topbar-actions">
+              <button className="action-btn ghost mobile-notify-btn" onClick={() => setNotificationWidgetOpen((prev) => !prev)}>
+                🔔
+                {notificationUnread > 0 ? <span className="notify-count">{notificationUnread}</span> : null}
+              </button>
+              <button className="action-btn mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>
+                ☰
+              </button>
+            </div>
+          </header>
+          {notificationWidgetOpen ? (
+            <div className="mobile-notify-panel">
+              <div className="notify-popout-head">
+                <span>Notifications</span>
+                <button className="action-btn ghost" onClick={() => markAllNotificationsRead()}>
+                  Read all
+                </button>
+              </div>
+              <div className="notify-popout-list">
+                {notificationList.length === 0 ? (
+                  <div className="muted small">No notifications.</div>
+                ) : (
+                  [...notificationList]
+                    .sort((a, b) => {
+                      const scoreA = a.read_at ? 1 : 0;
+                      const scoreB = b.read_at ? 1 : 0;
+                      if (scoreA !== scoreB) return scoreA - scoreB;
+                      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+                    })
+                    .slice(0, 8)
+                    .map((item) => (
+                      <button
+                        key={`mobile-notify-${item.id}`}
+                        className={`notify-item ${item.read_at ? "is-read" : "is-unread"}`}
+                        onClick={() => {
+                          if (!item.read_at) markNotificationRead(item.id);
+                        }}
+                      >
+                        <span className="notify-item-title">{item.title}</span>
+                        <span className="notify-item-body">{item.body ?? ""}</span>
+                      </button>
+                    ))
+                )}
+              </div>
+            </div>
+          ) : null}
+          <div
+            className={`mobile-drawer-backdrop ${mobileMenuOpen ? "is-open" : ""}`}
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          <aside className={`mobile-drawer ${mobileMenuOpen ? "is-open" : ""}`}>
+            <div className="mobile-drawer-head">
+              <div>
+                <div className="brand-title">Navigation</div>
+                <div className="muted small">@{user?.username ?? "user"}</div>
+              </div>
+              <button className="action-btn ghost" onClick={() => setMobileMenuOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="mobile-drawer-status">
+              <div className="stat-row">
+                <span>Queue</span>
+                <span>{activeQueueItems.length}</span>
+              </div>
+              <div className="stat-row">
+                <span>Jobs</span>
+                <span>{activeJobs.length}</span>
+              </div>
+              <div className="stat-row">
+                <span>Credits</span>
+                <span>{user?.credits_balance ?? 0}</span>
+              </div>
+            </div>
+            <nav className="mobile-drawer-nav">
+              {nav.map((key) => {
+                const locked = (key === "generator" && !canGenerate) || (key === "pipeline" && !canTrain);
+                return (
+                  <button
+                    key={`mobile-${key}`}
+                    className={`mobile-nav-btn ${view === key ? "is-active" : ""}`}
+                    disabled={locked}
+                    onClick={() => setView(key)}
+                  >
+                    {t[key]}
+                  </button>
+                );
+              })}
+              {isAdmin ? (
+                <button
+                  className={`mobile-nav-btn ${view === "admin" ? "is-active" : ""}`}
+                  onClick={() => {
+                    setView("admin");
+                    setAdminTab("queue");
+                  }}
+                >
+                  Admin Settings
+                </button>
+              ) : null}
+            </nav>
+            <div className="mobile-drawer-foot">
+              <div className="lang-switch">
+                <button onClick={() => setLang("en")}>EN</button>
+                <button onClick={() => setLang("de")}>DE</button>
+              </div>
+            </div>
+          </aside>
+        </>
+      ) : null}
       <aside className="rail">
         <div className="brand">
           <div className="logo">FX</div>
@@ -5132,6 +5344,69 @@ export default function App() {
               <h1>{t.commandDeck}</h1>
               <p>{t.queue}</p>
             </div>
+            {isMobileRouteActive ? (
+              <div className="mobile-command-deck">
+                <div className="mobile-command-stats">
+                  <div className="mobile-stat-card">
+                    <span>Running</span>
+                    <strong>{mobileDashboardJobs.filter((row) => row.status === "running").length}</strong>
+                  </div>
+                  <div className="mobile-stat-card">
+                    <span>Queued</span>
+                    <strong>
+                      {
+                        mobileDashboardJobs.filter((row) =>
+                          ["queued", "queued_initiated", "ready_to_train", "manual_tagging"].includes(row.status)
+                        ).length
+                      }
+                    </strong>
+                  </div>
+                  <div className="mobile-stat-card">
+                    <span>Failed</span>
+                    <strong>{mobileDashboardJobs.filter((row) => row.status === "failed").length}</strong>
+                  </div>
+                  <div className="mobile-stat-card">
+                    <span>Train</span>
+                    <strong>{dashboardTraining.filter((run) => run.status === "running").length}</strong>
+                  </div>
+                </div>
+                <div className="mobile-job-list">
+                  {mobileDashboardJobs.length === 0 ? (
+                    <div className="muted small">No jobs.</div>
+                  ) : (
+                    mobileDashboardJobs.map((row) => (
+                      <button
+                        key={`mobile-job-${row.kind}-${row.id}`}
+                        className={`mobile-job-card is-${row.status}`}
+                        onClick={() => openDashboardModal(row.kind, row.id, row.phase)}
+                      >
+                        <div className="mobile-job-top">
+                          <div className="mobile-job-title">{row.name}</div>
+                          <span className="badge">{row.status}</span>
+                        </div>
+                        <div className="mobile-job-id">{row.id}</div>
+                        {row.progressPct != null ? (
+                          <div className="progress">
+                            <span style={{ width: `${row.progressPct}%` }} />
+                          </div>
+                        ) : null}
+                        <div className="mobile-job-meta">{row.meta.join(" • ") || row.phase}</div>
+                      </button>
+                    ))
+                  )}
+                  {mobileCompletedJobsCount > 0 ? (
+                    <button
+                      className="action-btn ghost mobile-show-completed-btn"
+                      onClick={() => setMobileShowCompletedJobs((prev) => !prev)}
+                    >
+                      {mobileShowCompletedJobs
+                        ? "Hide completed jobs"
+                        : `Show completed jobs (${mobileCompletedJobsCount})`}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             <div className="dashboard-grid">
               <section className="panel task-column">
                 <div className="panel-header">
@@ -5459,6 +5734,19 @@ export default function App() {
                                     }}
                                   >
                                     Stop
+                                  </button>
+                                  <button
+                                    className="action-btn"
+                                    disabled={
+                                      !["failed", "cancelled", "stopped", "completed", "remove_failed"].includes(
+                                        String(dashboardModalData?.status ?? "")
+                                      )
+                                    }
+                                    onClick={() => {
+                                      if (dashboardModalData?.id) retryTrainingRun(dashboardModalData.id);
+                                    }}
+                                  >
+                                    Retry
                                   </button>
                                   <button
                                     className="action-btn danger"

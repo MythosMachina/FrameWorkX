@@ -249,7 +249,10 @@ async function deleteFileIfUnused(
         (SELECT COUNT(*)::int FROM gallery.models WHERE model_file_id = $1) AS model_count,
         (SELECT COUNT(*)::int FROM core.model_registry WHERE file_id = $1) AS registry_count,
         (SELECT COUNT(*)::int FROM pipeline.run_files WHERE file_id = $1) AS pipeline_count,
-        (SELECT COUNT(*)::int FROM training.datasets WHERE root_file_id = $1) AS dataset_count`,
+        (SELECT COUNT(*)::int FROM training.datasets WHERE root_file_id = $1) AS dataset_count,
+        (SELECT COUNT(*)::int FROM gallery.loras WHERE file_id = $1 OR dataset_file_id = $1) AS lora_count,
+        (SELECT COUNT(*)::int FROM gallery.lora_previews WHERE file_id = $1) AS lora_preview_count,
+        (SELECT COUNT(*)::int FROM generation.jobs WHERE model_file_id = $1 OR ($1::uuid = ANY(COALESCE(lora_file_ids, '{}'::uuid[])))) AS generation_job_count`,
       [fileId]
     )
   ).rows;
@@ -260,7 +263,10 @@ async function deleteFileIfUnused(
     Number(refs?.model_count ?? 0) +
     Number(refs?.registry_count ?? 0) +
     Number(refs?.pipeline_count ?? 0) +
-    Number(refs?.dataset_count ?? 0);
+    Number(refs?.dataset_count ?? 0) +
+    Number(refs?.lora_count ?? 0) +
+    Number(refs?.lora_preview_count ?? 0) +
+    Number(refs?.generation_job_count ?? 0);
   if (total > 0) return;
 
   const [row] = (await client.query("SELECT path, owner_user_id FROM files.file_registry WHERE id = $1", [fileId])).rows;
@@ -796,28 +802,42 @@ export async function registerPipelineRoutes(app: FastifyInstance) {
         return { error: "cannot_delete_running" };
       }
 
-      let trainingRef: { id: string; status: string; output_file_id: string | null } | null = null;
+      const trainingRefs: { id: string; status: string; output_file_id: string | null }[] = [];
+      const fileIds = new Set<string>();
       const [dataset] = (
         await client.query("SELECT id, root_file_id FROM training.datasets WHERE pipeline_run_id = $1", [runId])
       ).rows;
       if (dataset) {
-        const [trainingRow] = (
+        const trainingRows = (
           await client.query(
-            "SELECT id, status, output_file_id FROM training.runs WHERE dataset_id = $1 LIMIT 1",
+            "SELECT id, status, output_file_id FROM training.runs WHERE dataset_id = $1 ORDER BY created_at DESC",
             [dataset.id]
           )
         ).rows;
-        if (trainingRow) {
-          trainingRef = trainingRow;
-          const status = String(trainingRow.status ?? "");
-          if (!["failed", "cancelled", "stopped"].includes(status)) {
+        if (trainingRows.length) {
+          const active = trainingRows.filter(
+            (row: any) => !["failed", "cancelled", "stopped", "completed", "remove_failed"].includes(String(row.status ?? ""))
+          );
+          if (active.length) {
             await client.query("ROLLBACK");
             reply.code(409);
             return { error: "dataset_in_use" };
           }
-          await client.query("DELETE FROM training.metrics WHERE run_id = $1", [trainingRow.id]);
-          await client.query("DELETE FROM training.artifacts WHERE run_id = $1", [trainingRow.id]);
-          await client.query("DELETE FROM training.runs WHERE id = $1", [trainingRow.id]);
+          for (const row of trainingRows as any[]) {
+            trainingRefs.push({ id: row.id, status: row.status, output_file_id: row.output_file_id });
+            const previewRows = (
+              await client.query<{ file_id: string }>(
+                "SELECT file_id FROM training.artifacts WHERE run_id = $1 AND kind = 'preview'",
+                [row.id]
+              )
+            ).rows;
+            for (const preview of previewRows) {
+              if (preview?.file_id) fileIds.add(preview.file_id);
+            }
+            await client.query("DELETE FROM training.metrics WHERE run_id = $1", [row.id]);
+            await client.query("DELETE FROM training.artifacts WHERE run_id = $1", [row.id]);
+            await client.query("DELETE FROM training.runs WHERE id = $1", [row.id]);
+          }
         }
       }
 
@@ -826,11 +846,15 @@ export async function registerPipelineRoutes(app: FastifyInstance) {
       const fileRows = (
         await client.query("SELECT file_id FROM pipeline.run_files WHERE run_id = $1", [runId])
       ).rows as { file_id: string }[];
-      const fileIds = new Set<string>(fileRows.map((row) => row.file_id));
+      for (const row of fileRows) {
+        if (row?.file_id) fileIds.add(row.file_id);
+      }
       if (run.upload_file_id) fileIds.add(run.upload_file_id);
       if (run.dataset_file_id) fileIds.add(run.dataset_file_id);
       if (run.lora_file_id) fileIds.add(run.lora_file_id);
-      if (trainingRef?.output_file_id) fileIds.add(trainingRef.output_file_id);
+      for (const trainingRef of trainingRefs) {
+        if (trainingRef.output_file_id) fileIds.add(trainingRef.output_file_id);
+      }
 
       let anchorName: string | null = run.name ?? null;
       const getFileBasename = async (fileId?: string | null) => {
@@ -856,8 +880,9 @@ export async function registerPipelineRoutes(app: FastifyInstance) {
       }
 
       const runRoot = path.join(config.storageRoot, "users", userId, "datasets", runId);
-      const trainingRoot =
-        dataset && trainingRef ? path.join(config.storageRoot, "users", userId, "training", trainingRef.id) : null;
+      const trainingRoots = dataset
+        ? trainingRefs.map((row) => path.join(config.storageRoot, "users", userId, "training", row.id))
+        : [];
       const archiveEntries: { path: string }[] = [];
       try {
         await fsPromises.stat(runRoot);
@@ -865,7 +890,7 @@ export async function registerPipelineRoutes(app: FastifyInstance) {
       } catch {
         // ignore
       }
-      if (trainingRoot) {
+      for (const trainingRoot of trainingRoots) {
         try {
           await fsPromises.stat(trainingRoot);
           archiveEntries.push({ path: trainingRoot });
@@ -878,11 +903,12 @@ export async function registerPipelineRoutes(app: FastifyInstance) {
           await client.query("SELECT path FROM files.file_registry WHERE id = ANY($1::uuid[])", [Array.from(fileIds)])
         ).rows as { path: string | null }[];
         for (const row of filePathRows) {
-          if (!row?.path) continue;
-          if (row.path.startsWith(runRoot)) continue;
-          if (trainingRoot && row.path.startsWith(trainingRoot)) continue;
-          if (row.path.includes(`${path.sep}persistent${path.sep}`)) continue;
-          archiveEntries.push({ path: row.path });
+          const filePath = row?.path;
+          if (!filePath) continue;
+          if (filePath.startsWith(runRoot)) continue;
+          if (trainingRoots.some((root) => filePath.startsWith(root))) continue;
+          if (filePath.includes(`${path.sep}persistent${path.sep}`)) continue;
+          archiveEntries.push({ path: filePath });
         }
       }
       if (archiveEntries.length) {
@@ -909,7 +935,7 @@ export async function registerPipelineRoutes(app: FastifyInstance) {
 
       for (const fileId of fileIds) {
         await deleteFileIfUnused(client, fileId, {
-          skipArchivePaths: [runRoot, ...(trainingRoot ? [trainingRoot] : [])],
+          skipArchivePaths: [runRoot, ...trainingRoots],
           archiveLabel: "pipeline_delete",
           manifest: { type: "pipeline_output", reason: "delete_pipeline_run", source_id: runId },
           allowPersistentDelete: false
@@ -921,7 +947,7 @@ export async function registerPipelineRoutes(app: FastifyInstance) {
       } catch {
         // ignore
       }
-      if (trainingRoot) {
+      for (const trainingRoot of trainingRoots) {
         try {
           await fsPromises.rm(trainingRoot, { recursive: true, force: true });
         } catch {

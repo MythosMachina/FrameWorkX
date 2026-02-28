@@ -60,22 +60,279 @@ body.mobile-route {
 }
 
 .app-shell.mobile-route .rail {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: auto;
-  gap: 12px;
-  height: auto;
-  overflow: visible;
-  padding: 14px;
-  border-right: none;
-  border-bottom: 1px solid rgba(199, 123, 58, 0.15);
+  display: none;
 }
 
 .app-shell.mobile-route .content {
   padding: 14px;
+  padding-top: 86px;
 }
 
 .app-shell.mobile-route .topbar {
-  position: static;
+  display: none;
+}
+
+.mobile-topbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(199, 123, 58, 0.2);
+  background: linear-gradient(180deg, rgba(31, 22, 15, 0.98), rgba(20, 14, 10, 0.96));
+}
+
+.mobile-topbar-brand {
+  display: grid;
+  gap: 2px;
+}
+
+.mobile-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-notify-panel {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: 66px;
+  z-index: 39;
+  border: 1px solid rgba(210, 161, 95, 0.24);
+  background: linear-gradient(180deg, rgba(37, 26, 17, 0.98), rgba(22, 16, 12, 0.98));
+  max-height: 55vh;
+  overflow: auto;
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.mobile-menu-btn,
+.mobile-notify-btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.mobile-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 41;
+}
+
+.mobile-drawer-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mobile-drawer {
+  position: fixed;
+  right: -90%;
+  top: 0;
+  width: min(88vw, 360px);
+  height: 100vh;
+  z-index: 42;
+  padding: 12px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 12px;
+  border-left: 1px solid rgba(199, 123, 58, 0.25);
+  background: linear-gradient(180deg, rgba(36, 27, 18, 0.98), rgba(18, 14, 11, 0.98));
+  transition: right 0.2s ease;
+}
+
+.mobile-drawer.is-open {
+  right: 0;
+}
+
+.mobile-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mobile-drawer-status {
+  border: 1px solid rgba(210, 161, 95, 0.25);
+  background: rgba(34, 24, 16, 0.65);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.mobile-drawer-nav {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.mobile-nav-btn {
+  min-height: 44px;
+  text-align: left;
+  border: 1px solid rgba(210, 161, 95, 0.25);
+  color: var(--ink);
+  background: transparent;
+  padding: 10px 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.mobile-nav-btn.is-active {
+  background: linear-gradient(135deg, rgba(199, 123, 58, 0.3), rgba(65, 44, 26, 0.9));
+  border-color: var(--accent);
+}
+
+.mobile-drawer-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mobile-command-deck {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.mobile-command-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mobile-stat-card {
+  border: 1px solid rgba(210, 161, 95, 0.22);
+  background: rgba(34, 24, 16, 0.7);
+  padding: 10px;
+  display: grid;
+  gap: 2px;
+}
+
+.mobile-stat-card span {
+  font-size: 11px;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+}
+
+.mobile-stat-card strong {
+  font-size: 18px;
+}
+
+.mobile-job-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mobile-job-card {
+  border: 1px solid rgba(210, 161, 95, 0.22);
+  background: rgba(34, 24, 16, 0.75);
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  color: var(--ink);
+}
+
+.mobile-job-top {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mobile-job-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mobile-job-id {
+  color: var(--ink-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-job-meta {
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.mobile-show-completed-btn {
+  width: 100%;
+  min-height: 40px;
+}
+
+.app-shell.mobile-route .dashboard-grid {
+  display: none;
+}
+
+.app-shell.mobile-route .view-header {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.app-shell.mobile-route .view-header p {
+  margin: 0;
+}
+
+.app-shell.mobile-route .panel-header {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.app-shell.mobile-route .form-grid,
+.app-shell.mobile-route .wizard-grid,
+.app-shell.mobile-route .settings-layout,
+.app-shell.mobile-route .dm-layout,
+.app-shell.mobile-route .admin-grid,
+.app-shell.mobile-route .generator-layout,
+.app-shell.mobile-route .public-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.app-shell.mobile-route .gallery-grid,
+.app-shell.mobile-route .model-grid,
+.app-shell.mobile-route .lora-grid,
+.app-shell.mobile-route .image-grid,
+.app-shell.mobile-route .style-grid,
+.app-shell.mobile-route .stat-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.app-shell.mobile-route .modal-overlay,
+.app-shell.mobile-route .image-modal,
+.app-shell.mobile-route .auth-modal {
+  align-items: flex-end;
+}
+
+.app-shell.mobile-route .manual-modal,
+.app-shell.mobile-route .dashboard-modal,
+.app-shell.mobile-route .image-modal-content,
+.app-shell.mobile-route .auth-modal-content {
+  width: 100%;
+  max-width: none;
+  max-height: 88vh;
+  border-radius: 16px 16px 0 0;
+}
+
+@media (max-width: 520px) {
+  .app-shell.mobile-route .gallery-grid,
+  .app-shell.mobile-route .model-grid,
+  .app-shell.mobile-route .lora-grid,
+  .app-shell.mobile-route .image-grid,
+  .app-shell.mobile-route .style-grid,
+  .app-shell.mobile-route .stat-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .rail {

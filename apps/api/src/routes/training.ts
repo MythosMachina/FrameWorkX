@@ -9,6 +9,8 @@ import { requirePermission } from "../lib/permissions.js";
 const config = loadConfig(process.cwd());
 const previewExtensions = new Set([".png", ".jpg", ".jpeg", ".webp"]);
 const datasetImageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".bmp"]);
+const ACTIVE_TRAINING_STATUSES = ["credit_pending", "queued", "running", "removing"];
+const TERMINAL_TRAINING_STATUSES = ["failed", "cancelled", "stopped", "completed", "remove_failed"];
 
 function guessMime(filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
@@ -141,7 +143,13 @@ async function deleteFileIfUnused(
         (SELECT COUNT(*)::int FROM generation.outputs WHERE file_id = $1) AS output_count,
         (SELECT COUNT(*)::int FROM training.runs WHERE output_file_id = $1) AS training_count,
         (SELECT COUNT(*)::int FROM gallery.models WHERE model_file_id = $1) AS model_count,
-        (SELECT COUNT(*)::int FROM core.model_registry WHERE file_id = $1) AS registry_count`,
+        (SELECT COUNT(*)::int FROM core.model_registry WHERE file_id = $1) AS registry_count,
+        (SELECT COUNT(*)::int FROM gallery.loras WHERE file_id = $1 OR dataset_file_id = $1) AS lora_count,
+        (SELECT COUNT(*)::int FROM gallery.lora_previews WHERE file_id = $1) AS lora_preview_count,
+        (SELECT COUNT(*)::int FROM generation.jobs WHERE model_file_id = $1 OR ($1::uuid = ANY(COALESCE(lora_file_ids, '{}'::uuid[])))) AS generation_job_count,
+        (SELECT COUNT(*)::int FROM pipeline.run_files WHERE file_id = $1) AS pipeline_run_file_count,
+        (SELECT COUNT(*)::int FROM pipeline.runs WHERE upload_file_id = $1 OR dataset_file_id = $1 OR lora_file_id = $1) AS pipeline_run_count,
+        (SELECT COUNT(*)::int FROM training.datasets WHERE root_file_id = $1) AS training_dataset_count`,
       [fileId]
     )
   ).rows;
@@ -150,7 +158,13 @@ async function deleteFileIfUnused(
     Number(refs?.output_count ?? 0) +
     Number(refs?.training_count ?? 0) +
     Number(refs?.model_count ?? 0) +
-    Number(refs?.registry_count ?? 0);
+    Number(refs?.registry_count ?? 0) +
+    Number(refs?.lora_count ?? 0) +
+    Number(refs?.lora_preview_count ?? 0) +
+    Number(refs?.generation_job_count ?? 0) +
+    Number(refs?.pipeline_run_file_count ?? 0) +
+    Number(refs?.pipeline_run_count ?? 0) +
+    Number(refs?.training_dataset_count ?? 0);
   if (total > 0) return;
 
   const [row] = (await client.query("SELECT path, owner_user_id FROM files.file_registry WHERE id = $1", [fileId])).rows;
@@ -343,8 +357,12 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const [run] = (await client.query("SELECT * FROM training.runs WHERE id = $1 AND user_id = $2", [runId, userId]))
-        .rows;
+      const [run] = (
+        await client.query(
+          "SELECT id, status, credits_reserved, credits_charged_at, credits_released_at, pipeline_run_id, dataset_id FROM training.runs WHERE id = $1 AND user_id = $2",
+          [runId, userId]
+        )
+      ).rows;
       if (!run) {
         await client.query("ROLLBACK");
         reply.code(404);
@@ -370,10 +388,126 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
         "UPDATE training.runs SET status = 'cancelled', updated_at = NOW(), finished_at = NOW() WHERE id = $1",
         [runId]
       );
+      if (run.pipeline_run_id && run.dataset_id) {
+        const [activeRun] = (
+          await client.query(
+            "SELECT id FROM training.runs WHERE dataset_id = $1 AND id <> $2 AND status = ANY($3::text[]) LIMIT 1",
+            [run.dataset_id, runId, ACTIVE_TRAINING_STATUSES]
+          )
+        ).rows;
+        if (!activeRun) {
+          await client.query(
+            "UPDATE pipeline.runs SET status = 'ready_to_train', last_step = 'ready_to_train', updated_at = NOW() WHERE id = $1 AND status IN ('training_credit_pending','training_queued')",
+            [run.pipeline_run_id]
+          );
+        }
+      }
       await client.query("COMMIT");
       return { status: "cancelled" };
     } catch (err) {
       await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post("/api/training/runs/:id/retry", { preHandler: requireAuth }, async (request: any, reply) => {
+    await requirePermission(request, reply, "train.run");
+    const userId = request.user.sub as string;
+    const sourceRunId = request.params.id as string;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const [sourceRun] = (
+        await client.query(
+          `SELECT id, status, dataset_id, pipeline_run_id, base_model_file_id, dataset_file_id, settings
+           FROM training.runs
+           WHERE id = $1 AND user_id = $2`,
+          [sourceRunId, userId]
+        )
+      ).rows;
+      if (!sourceRun) {
+        await client.query("ROLLBACK");
+        reply.code(404);
+        return { error: "not_found" };
+      }
+      const sourceStatus = String(sourceRun.status ?? "");
+      if (!TERMINAL_TRAINING_STATUSES.includes(sourceStatus)) {
+        await client.query("ROLLBACK");
+        reply.code(409);
+        return { error: "cannot_retry_status" };
+      }
+      if (!sourceRun.dataset_id) {
+        await client.query("ROLLBACK");
+        reply.code(409);
+        return { error: "dataset_not_ready" };
+      }
+
+      const [dataset] = (
+        await client.query("SELECT id, status, root_file_id FROM training.datasets WHERE id = $1 AND user_id = $2", [
+          sourceRun.dataset_id,
+          userId
+        ])
+      ).rows;
+      if (!dataset) {
+        await client.query("ROLLBACK");
+        reply.code(409);
+        return { error: "dataset_not_ready" };
+      }
+
+      const [activeRun] = (
+        await client.query(
+          "SELECT id FROM training.runs WHERE dataset_id = $1 AND status = ANY($2::text[]) LIMIT 1 FOR UPDATE",
+          [sourceRun.dataset_id, ACTIVE_TRAINING_STATUSES]
+        )
+      ).rows;
+      if (activeRun) {
+        await client.query("ROLLBACK");
+        reply.code(409);
+        return { error: "active_training_exists" };
+      }
+
+      const runId = randomUUID();
+      const cost = Number((await getGlobalSetting("credits.train", 5)) ?? 5);
+      await client.query(
+        `INSERT INTO training.runs
+          (id, user_id, pipeline_run_id, dataset_id, status, base_model_file_id, dataset_file_id, credits_reserved, settings)
+         VALUES ($1,$2,$3,$4,'credit_pending',$5,$6,0,$7)`,
+        [
+          runId,
+          userId,
+          sourceRun.pipeline_run_id ?? null,
+          sourceRun.dataset_id,
+          sourceRun.base_model_file_id ?? null,
+          sourceRun.dataset_file_id ?? dataset.root_file_id ?? null,
+          sourceRun.settings ?? {}
+        ]
+      );
+      await enqueueCreditIntentWithClient(client, {
+        userId,
+        action: "reserve_train",
+        amount: cost,
+        refType: "training_run",
+        refId: runId,
+        payload: { reason: "retry_training_run", source_run_id: sourceRunId, pipeline_run_id: sourceRun.pipeline_run_id ?? null },
+        idempotencyKey: `reserve_train:${runId}`
+      });
+      if (sourceRun.pipeline_run_id) {
+        await client.query(
+          "UPDATE pipeline.runs SET status = 'training_credit_pending', last_step = 'training_credit_pending', updated_at = NOW() WHERE id = $1",
+          [sourceRun.pipeline_run_id]
+        );
+      }
+
+      await client.query("COMMIT");
+      return { status: "credit_pending", run_id: runId, source_run_id: sourceRunId };
+    } catch (err: any) {
+      await client.query("ROLLBACK");
+      if (err?.code === "23505") {
+        reply.code(409);
+        return { error: "active_training_exists" };
+      }
       throw err;
     } finally {
       client.release();
@@ -389,7 +523,7 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
       await client.query("BEGIN");
       [run] = (
         await client.query(
-          "SELECT id, user_id, status, output_file_id, credits_reserved, credits_charged_at, credits_released_at, pipeline_run_id, dataset_file_id FROM training.runs WHERE id = $1 AND user_id = $2",
+          "SELECT id, user_id, status, output_file_id, credits_reserved, credits_charged_at, credits_released_at, pipeline_run_id, dataset_id, dataset_file_id FROM training.runs WHERE id = $1 AND user_id = $2",
           [runId, userId]
         )
       ).rows;
@@ -402,17 +536,6 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
         await client.query("ROLLBACK");
         reply.code(409);
         return { error: "cannot_delete_running" };
-      }
-      if (run.pipeline_run_id) {
-        const [pipelineRow] = (
-          await client.query("SELECT status FROM pipeline.runs WHERE id = $1", [run.pipeline_run_id])
-        ).rows as { status?: string }[];
-        const pipelineStatus = String(pipelineRow?.status ?? "");
-        if (["queued", "queued_initiated", "running", "manual_tagging", "ready_to_train"].includes(pipelineStatus)) {
-          await client.query("ROLLBACK");
-          reply.code(409);
-          return { error: "pipeline_still_active_delete_pipeline_first" };
-        }
       }
       if (run.status === "removing") {
         await client.query("ROLLBACK");
@@ -431,7 +554,7 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
       await client.query("BEGIN");
       const [freshRun] = (
         await client.query(
-          "SELECT id, user_id, status, output_file_id, credits_reserved, credits_charged_at, credits_released_at, pipeline_run_id, dataset_file_id FROM training.runs WHERE id = $1 AND user_id = $2 FOR UPDATE",
+          "SELECT id, user_id, status, output_file_id, credits_reserved, credits_charged_at, credits_released_at, pipeline_run_id, dataset_id, dataset_file_id FROM training.runs WHERE id = $1 AND user_id = $2 FOR UPDATE",
           [runId, userId]
         )
       ).rows;
@@ -442,6 +565,13 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
       run = freshRun;
 
       await client.query("DELETE FROM training.metrics WHERE run_id = $1", [runId]);
+      const previewRows = (
+        await client.query<{ file_id: string }>(
+          "SELECT file_id FROM training.artifacts WHERE run_id = $1 AND kind = 'preview'",
+          [runId]
+        )
+      ).rows;
+      const previewFileIds = previewRows.map((row) => row.file_id).filter(Boolean);
       await client.query("DELETE FROM training.artifacts WHERE run_id = $1", [runId]);
 
       if (run.credits_reserved && !run.credits_charged_at && !run.credits_released_at) {
@@ -456,8 +586,59 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
         });
       }
       await client.query("DELETE FROM training.runs WHERE id = $1", [runId]);
+      if (run.pipeline_run_id && run.dataset_id) {
+        const [activeRun] = (
+          await client.query(
+            "SELECT id FROM training.runs WHERE dataset_id = $1 AND status = ANY($2::text[]) LIMIT 1",
+            [run.dataset_id, ACTIVE_TRAINING_STATUSES]
+          )
+        ).rows;
+        if (!activeRun) {
+          await client.query(
+            "UPDATE pipeline.runs SET status = 'ready_to_train', last_step = 'ready_to_train', updated_at = NOW() WHERE id = $1 AND status IN ('training_credit_pending','training_queued')",
+            [run.pipeline_run_id]
+          );
+        }
+      }
 
       const outputRoot = path.join(config.storageRoot, "users", userId, "training", runId);
+      let datasetRoot: string | null = null;
+      let datasetRootFileId: string | null = null;
+      if (run.dataset_id) {
+        const [remainingRun] = (
+          await client.query("SELECT id FROM training.runs WHERE dataset_id = $1 LIMIT 1", [run.dataset_id])
+        ).rows;
+        if (!remainingRun) {
+          const [datasetRow] = (
+            await client.query("SELECT id, root_file_id, pipeline_run_id FROM training.datasets WHERE id = $1", [run.dataset_id])
+          ).rows as { id: string; root_file_id: string | null; pipeline_run_id: string | null }[];
+          if (datasetRow) {
+            let pipelineStatus = "";
+            if (datasetRow.pipeline_run_id) {
+              const [pipelineRow] = (
+                await client.query("SELECT status FROM pipeline.runs WHERE id = $1", [datasetRow.pipeline_run_id])
+              ).rows as { status?: string }[];
+              pipelineStatus = String(pipelineRow?.status ?? "");
+            }
+            const canDeleteDataset =
+              !datasetRow.pipeline_run_id ||
+              ["completed", "failed", "cancelled", "stopped", "remove_failed"].includes(pipelineStatus);
+            if (canDeleteDataset) {
+              if (datasetRow.pipeline_run_id) {
+                await client.query(
+                  "UPDATE pipeline.runs SET dataset_file_id = NULL, updated_at = NOW() WHERE id = $1",
+                  [datasetRow.pipeline_run_id]
+                );
+              }
+              await client.query("DELETE FROM training.datasets WHERE id = $1", [datasetRow.id]);
+              datasetRootFileId = datasetRow.root_file_id ?? null;
+              if (datasetRow.pipeline_run_id) {
+                datasetRoot = path.join(config.storageRoot, "users", userId, "datasets", datasetRow.pipeline_run_id);
+              }
+            }
+          }
+        }
+      }
       let anchorName: string | null = null;
       if (run.pipeline_run_id) {
         const [pipelineRow] = (
@@ -486,6 +667,14 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
         archiveEntries.push({ path: outputRoot });
       } catch {
         // ignore
+      }
+      if (datasetRoot) {
+        try {
+          await fs.stat(datasetRoot);
+          archiveEntries.push({ path: datasetRoot });
+        } catch {
+          // ignore
+        }
       }
       if (run.output_file_id) {
         const rows = (
@@ -517,10 +706,26 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
 
       if (run.output_file_id) {
         await deleteFileIfUnused(client, run.output_file_id, {
-          skipArchivePaths: [outputRoot],
+          skipArchivePaths: [outputRoot, ...(datasetRoot ? [datasetRoot] : [])],
           archiveLabel: "training_delete",
           manifest: { type: "training_output", reason: "delete_training_run", source_id: runId },
           allowPersistentDelete: false
+        });
+      }
+      if (datasetRootFileId) {
+        await deleteFileIfUnused(client, datasetRootFileId, {
+          skipArchivePaths: [outputRoot, ...(datasetRoot ? [datasetRoot] : [])],
+          archiveLabel: "training_delete",
+          manifest: { type: "training_dataset", reason: "delete_training_run", source_id: runId },
+          allowPersistentDelete: false
+        });
+      }
+      for (const fileId of previewFileIds) {
+        await deleteFileIfUnused(client, fileId, {
+          skipArchivePaths: [outputRoot, ...(datasetRoot ? [datasetRoot] : [])],
+          archiveLabel: "training_delete",
+          manifest: { type: "training_preview", reason: "delete_training_run", source_id: runId },
+          allowPersistentDelete: true
         });
       }
 
@@ -528,6 +733,13 @@ export async function registerTrainingRoutes(app: FastifyInstance) {
         await fs.rm(outputRoot, { recursive: true, force: true });
       } catch {
         // ignore
+      }
+      if (datasetRoot) {
+        try {
+          await fs.rm(datasetRoot, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
       }
 
       await client.query("COMMIT");
