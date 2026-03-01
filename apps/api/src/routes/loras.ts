@@ -190,12 +190,15 @@ export async function registerLoraRoutes(app: FastifyInstance) {
       `SELECT l.id,
               l.name,
               l.description,
+              l.trigger_token,
+              l.activator_token,
               l.file_id,
               l.user_id,
               l.is_public,
               l.created_at,
               l.source,
               u.username,
+              p.avatar_file_id,
               l.dataset_file_id,
               (SELECT COUNT(*)::int FROM social.likes WHERE target_type = 'lora' AND target_id = l.id) AS like_count,
               (SELECT COUNT(*)::int FROM social.comments WHERE target_type = 'lora' AND target_id = l.id) AS comment_count,
@@ -236,6 +239,7 @@ export async function registerLoraRoutes(app: FastifyInstance) {
               ) AS remove_status
        FROM gallery.loras l
        JOIN core.users u ON u.id = l.user_id
+       LEFT JOIN core.profiles p ON p.user_id = l.user_id
        WHERE l.is_public = true
          AND NOT EXISTS (
            SELECT 1
@@ -254,12 +258,15 @@ export async function registerLoraRoutes(app: FastifyInstance) {
       `SELECT l.id,
               l.name,
               l.description,
+              l.trigger_token,
+              l.activator_token,
               l.file_id,
               l.user_id,
               l.is_public,
               l.created_at,
               l.source,
               u.username,
+              p.avatar_file_id,
               l.dataset_file_id,
               COALESCE(
                 (
@@ -298,6 +305,7 @@ export async function registerLoraRoutes(app: FastifyInstance) {
               ) AS remove_status
        FROM gallery.loras l
        JOIN core.users u ON u.id = l.user_id
+       LEFT JOIN core.profiles p ON p.user_id = l.user_id
        WHERE l.id = $1
          AND l.is_public = true
          AND NOT EXISTS (
@@ -320,12 +328,15 @@ export async function registerLoraRoutes(app: FastifyInstance) {
       `SELECT l.id,
               l.name,
               l.description,
+              l.trigger_token,
+              l.activator_token,
               l.file_id,
               l.user_id,
               l.is_public,
               l.created_at,
               l.source,
               u.username,
+              p.avatar_file_id,
               l.dataset_file_id,
               (SELECT COUNT(*)::int FROM social.likes WHERE target_type = 'lora' AND target_id = l.id) AS like_count,
               (SELECT COUNT(*)::int FROM social.comments WHERE target_type = 'lora' AND target_id = l.id) AS comment_count,
@@ -366,6 +377,7 @@ export async function registerLoraRoutes(app: FastifyInstance) {
               ) AS remove_status
        FROM gallery.loras l
        JOIN core.users u ON u.id = l.user_id
+       LEFT JOIN core.profiles p ON p.user_id = l.user_id
        WHERE l.user_id = $1
          AND l.is_public = false
        ORDER BY l.created_at DESC
@@ -411,12 +423,15 @@ export async function registerLoraRoutes(app: FastifyInstance) {
       `SELECT l.id,
               l.name,
               l.description,
+              l.trigger_token,
+              l.activator_token,
               l.file_id,
               l.user_id,
               l.is_public,
               l.created_at,
               l.source,
               u.username,
+              p.avatar_file_id,
               l.dataset_file_id,
               COALESCE(
                 (
@@ -455,6 +470,7 @@ export async function registerLoraRoutes(app: FastifyInstance) {
               ) AS remove_status
        FROM gallery.loras l
        JOIN core.users u ON u.id = l.user_id
+       LEFT JOIN core.profiles p ON p.user_id = l.user_id
        WHERE l.id = $1`,
       [loraId]
     );
@@ -759,8 +775,12 @@ export async function registerLoraRoutes(app: FastifyInstance) {
   app.patch("/api/loras/:id", { preHandler: requireAuth }, async (request: any, reply) => {
     const userId = request.user.sub as string;
     const loraId = request.params.id as string;
-    const body = request.body as { description?: string };
-    const description = typeof body.description === "string" ? body.description.trim() : "";
+    const body = request.body as { name?: string; description?: string; trigger_token?: string; activator_token?: string };
+    const name = typeof body.name === "string" ? body.name.trim() : undefined;
+    const description = typeof body.description === "string" ? body.description.trim() : undefined;
+    const triggerToken = typeof body.trigger_token === "string" ? body.trigger_token.trim() : undefined;
+    const activatorToken = typeof body.activator_token === "string" ? body.activator_token.trim() : undefined;
+    const unifiedToken = typeof triggerToken !== "undefined" ? triggerToken : activatorToken;
     const [row] = await query<{ user_id: string }>("SELECT user_id FROM gallery.loras WHERE id = $1", [loraId]);
     if (!row) {
       reply.code(404);
@@ -770,10 +790,24 @@ export async function registerLoraRoutes(app: FastifyInstance) {
       reply.code(403);
       return { error: "forbidden" };
     }
-    await execute("UPDATE gallery.loras SET description = $1, updated_at = NOW() WHERE id = $2", [
-      description,
-      loraId
-    ]);
+    if (
+      typeof name === "undefined" &&
+      typeof description === "undefined" &&
+      typeof unifiedToken === "undefined"
+    ) {
+      reply.code(400);
+      return { error: "missing_fields" };
+    }
+    await execute(
+      `UPDATE gallery.loras
+       SET name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           trigger_token = COALESCE($3, trigger_token),
+           activator_token = COALESCE($3, activator_token),
+           updated_at = NOW()
+       WHERE id = $5`,
+      [name, description, unifiedToken, unifiedToken, loraId]
+    );
     return { status: "ok" };
   });
 

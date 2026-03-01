@@ -10,12 +10,14 @@
     "dev:api": "npm run -w @frameworkx/api dev",
     "dev:worker": "npm run -w @frameworkx/worker dev",
     "dev:indexer": "npm run -w @frameworkx/indexer dev",
+    "dev:social": "npm run -w @frameworkx/social dev",
     "dev:ui": "npm run -w @frameworkx/ui dev",
-    "build": "npm run -w @frameworkx/shared build && npm run -w @frameworkx/edge build && npm run -w @frameworkx/api build && npm run -w @frameworkx/worker build && npm run -w @frameworkx/indexer build && npm run -w @frameworkx/ui build",
+    "build": "npm run -w @frameworkx/shared build && npm run -w @frameworkx/edge build && npm run -w @frameworkx/api build && npm run -w @frameworkx/worker build && npm run -w @frameworkx/indexer build && npm run -w @frameworkx/social build && npm run -w @frameworkx/ui build",
     "start:edge": "npm run -w @frameworkx/edge start",
     "start:api": "npm run -w @frameworkx/api start",
     "start:worker": "npm run -w @frameworkx/worker start",
     "start:indexer": "npm run -w @frameworkx/indexer start",
+    "start:social": "npm run -w @frameworkx/social start",
     "start:ui": "npm run -w @frameworkx/ui preview"
   },
   "dependencies": {

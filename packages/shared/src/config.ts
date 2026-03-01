@@ -8,7 +8,8 @@ const envSchema = z.object({
   FRAMEWORKX_API_PORT: z.string().optional(),
   FRAMEWORKX_WORKER_PORT: z.string().optional(),
   FRAMEWORKX_INDEXER_PORT: z.string().optional(),
-  FRAMEWORKX_UI_PORT: z.string().optional()
+  FRAMEWORKX_UI_PORT: z.string().optional(),
+  FRAMEWORKX_SOCIAL_PORT: z.string().optional()
 });
 
 export type AppConfig = {
@@ -19,6 +20,7 @@ export type AppConfig = {
   workerPort: number;
   indexerPort: number;
   uiPort: number;
+  socialPort: number;
 };
 
 export function loadConfig(cwd = process.cwd()): AppConfig {
@@ -38,6 +40,7 @@ export function loadConfig(cwd = process.cwd()): AppConfig {
     apiPort: Number(env.FRAMEWORKX_API_PORT ?? 4100),
     workerPort: Number(env.FRAMEWORKX_WORKER_PORT ?? 4200),
     indexerPort: Number(env.FRAMEWORKX_INDEXER_PORT ?? 4300),
-    uiPort: Number(env.FRAMEWORKX_UI_PORT ?? 5173)
+    uiPort: Number(env.FRAMEWORKX_UI_PORT ?? 5173),
+    socialPort: Number(env.FRAMEWORKX_SOCIAL_PORT ?? 4400)
   };
 }

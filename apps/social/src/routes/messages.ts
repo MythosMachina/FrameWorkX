@@ -1,68 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
-import { enqueueNotificationEventWithClient, execute, loadConfig, pool, query } from "@frameworkx/shared";
-
-const config = loadConfig(process.cwd());
-
-function parseBooleanFlag(value: unknown, fallback = false) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (["1", "true", "yes", "on", "enabled"].includes(normalized)) return true;
-    if (["0", "false", "no", "off", "disabled"].includes(normalized)) return false;
-  }
-  return fallback;
-}
-
-async function getSocialServiceEnabledFlag() {
-  if (process.env.FRAMEWORKX_SOCIAL_SERVICE_ENABLED != null) {
-    return parseBooleanFlag(process.env.FRAMEWORKX_SOCIAL_SERVICE_ENABLED, false);
-  }
-  const [row] = await query<{ value: unknown }>(
-    "SELECT value FROM core.settings WHERE scope = 'global' AND scope_id IS NULL AND key = 'social.service.enabled' LIMIT 1"
-  );
-  return parseBooleanFlag(row?.value, false);
-}
-
-function getSocialServiceBaseUrl() {
-  const raw = String(process.env.FRAMEWORKX_SOCIAL_BASE_URL ?? "").trim();
-  if (raw) return raw.replace(/\/+$/, "");
-  return `http://127.0.0.1:${config.socialPort}`;
-}
-
-function hasJsonBody(method: string) {
-  return ["POST", "PUT", "PATCH", "DELETE"].includes(method.toUpperCase());
-}
-
-async function proxySocialRequest(baseUrl: string, request: any, reply: any) {
-  const method = String(request.method ?? "GET").toUpperCase();
-  const reqUrl = String(request.raw?.url ?? "").trim();
-  const targetUrl = `${baseUrl}${reqUrl}`;
-  const headers: Record<string, string> = {};
-  const auth = String(request.headers?.authorization ?? "").trim();
-  if (auth) headers.authorization = auth;
-  if (hasJsonBody(method)) headers["content-type"] = "application/json";
-
-  let response: Response;
-  try {
-    response = await fetch(targetUrl, {
-      method,
-      headers,
-      body: hasJsonBody(method) && request.body !== undefined ? JSON.stringify(request.body) : undefined
-    });
-  } catch {
-    reply.code(502);
-    return { error: "social_service_unreachable" };
-  }
-
-  reply.code(response.status);
-  const contentType = String(response.headers.get("content-type") ?? "");
-  if (contentType.includes("application/json")) {
-    return await response.json();
-  }
-  return { status: response.status, text: await response.text() };
-}
+import { enqueueNotificationEventWithClient, execute, pool, query } from "@frameworkx/shared";
 
 async function requireAuth(request: any, reply: any) {
   try {
@@ -101,29 +39,6 @@ async function getBlockStateWithClient(client: any, userId: string, targetUserId
 }
 
 export async function registerMessageRoutes(app: FastifyInstance) {
-  const socialServiceEnabled = await getSocialServiceEnabledFlag();
-  if (socialServiceEnabled) {
-    const socialBaseUrl = getSocialServiceBaseUrl();
-    app.log.info({ socialBaseUrl }, "messages routes proxied to social service");
-    const proxied = (url: string, methods: Array<"GET" | "POST" | "PATCH" | "DELETE">) => {
-      app.route({
-        method: methods,
-        url,
-        preHandler: requireAuth,
-        handler: async (request: any, reply) => proxySocialRequest(socialBaseUrl, request, reply)
-      });
-    };
-    proxied("/api/dm/open", ["POST"]);
-    proxied("/api/dm/threads", ["GET"]);
-    proxied("/api/dm/threads/:id/messages", ["GET", "POST"]);
-    proxied("/api/dm/threads/:id/read", ["POST"]);
-    proxied("/api/dm/threads/:id", ["DELETE"]);
-    proxied("/api/dm/unread-count", ["GET"]);
-    proxied("/api/dm/blocks", ["GET", "POST"]);
-    proxied("/api/dm/blocks/:id", ["DELETE"]);
-    return;
-  }
-
   app.post("/api/dm/open", { preHandler: requireAuth }, async (request: any, reply) => {
     const userId = request.user.sub as string;
     const body = request.body as { target_user_id?: string };

@@ -125,7 +125,7 @@ done
 systemctl daemon-reload
 
 if [[ "$ENABLE_UNITS" -eq 1 ]]; then
-  systemctl enable --now frameworkx-api frameworkx-ui frameworkx-edge frameworkx-indexer
+  systemctl enable --now frameworkx-api frameworkx-ui frameworkx-edge frameworkx-indexer frameworkx-social
   systemctl enable --now \
     frameworkx-worker@health \
     frameworkx-worker@intake \
@@ -138,4 +138,3 @@ if [[ "$ENABLE_UNITS" -eq 1 ]]; then
 fi
 
 exit 0
-

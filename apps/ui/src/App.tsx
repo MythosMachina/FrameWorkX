@@ -110,7 +110,10 @@ type LoraEntry = {
   is_public?: boolean;
   created_at: string;
   username: string;
+  avatar_file_id?: string | null;
   source?: string;
+  trigger_token?: string | null;
+  activator_token?: string | null;
   like_count?: number;
   comment_count?: number;
   preview_file_ids?: string[];
@@ -118,6 +121,9 @@ type LoraEntry = {
   preview_in_flight?: number;
   dataset_file_id?: string | null;
   remove_status?: string;
+  download_count?: number;
+  generated_count?: number;
+  favorite_count?: number;
 };
 
 type StyleOption = {
@@ -439,11 +445,11 @@ const copy = {
   }
 };
 
-const nav = ["dashboard", "pipeline", "generator", "gallery", "lora", "messages", "settings"] as const;
+const nav = ["dashboard", "pipeline", "generator", "gallery", "lora", "messages"] as const;
 
 type NavKey = (typeof nav)[number] | "admin";
-type AppView = NavKey | "profile";
-type SettingsTab = "profile" | "security" | "notifications" | "automation" | "tokens";
+type AppView = NavKey | "profile" | "settings" | "edit_profile";
+type SettingsTab = "security" | "notifications" | "automation" | "tokens";
 
 const adminTabs = [
   "queue",
@@ -745,9 +751,8 @@ function publicImageHref(imageId: string, lang: Lang) {
 
 function publicLoraHref(loraId: string, lang: Lang) {
   const params = new URLSearchParams();
-  params.set("lora", loraId);
   params.set("lang", lang);
-  return `/?${params.toString()}`;
+  return `/lora/${encodeURIComponent(loraId)}?${params.toString()}`;
 }
 
 function fileUrl(fileId: string, token: string, options?: { thumb?: boolean; size?: number }) {
@@ -762,8 +767,10 @@ function fileUrl(fileId: string, token: string, options?: { thumb?: boolean; siz
 }
 
 function renderAvatar(fileId?: string | null, authToken?: string | null, altLabel?: string) {
+  const fallbackLabel = (altLabel ?? "?").replace(/^@+/, "").trim();
+  const fallbackInitial = fallbackLabel ? fallbackLabel.charAt(0).toUpperCase() : "?";
   if (!fileId) {
-    return <span className="tile-avatar-wrap placeholder" />;
+    return <span className="tile-avatar-wrap placeholder">{fallbackInitial}</span>;
   }
   return (
     <span className="tile-avatar-wrap">
@@ -903,6 +910,7 @@ const VIEW_SEGMENT_MAP: Record<AppView, string> = {
   lora: "lora",
   messages: "messages",
   settings: "settings",
+  edit_profile: "edit-profile",
   admin: "admin",
   profile: "profile"
 };
@@ -915,6 +923,7 @@ const SEGMENT_VIEW_MAP: Record<string, AppView> = {
   lora: "lora",
   messages: "messages",
   settings: "settings",
+  "edit-profile": "edit_profile",
   admin: "admin",
   profile: "profile"
 };
@@ -935,6 +944,19 @@ function getViewFromPathname(pathname: string): AppView {
   const withoutMobile = mobile ? normalized.replace(/^\/m(?=\/|$)/, "") || "/" : normalized;
   const segment = withoutMobile.split("/").filter(Boolean)[0] ?? "";
   return SEGMENT_VIEW_MAP[segment] ?? "dashboard";
+}
+
+function getLoraRouteIdFromPathname(pathname: string) {
+  const normalized = normalizePathname(pathname);
+  const mobile = isMobileRoute(normalized);
+  const withoutMobile = mobile ? normalized.replace(/^\/m(?=\/|$)/, "") || "/" : normalized;
+  const match = withoutMobile.match(/^\/lora\/([^/]+)$/);
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 function getPathForView(view: AppView, mobile: boolean) {
@@ -984,7 +1006,10 @@ export default function App() {
   const [view, setView] = useState<AppView>(
     typeof window !== "undefined" ? getViewFromPathname(window.location.pathname) : "dashboard"
   );
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
+  const [loraRouteId, setLoraRouteId] = useState<string>(
+    typeof window !== "undefined" ? getLoraRouteIdFromPathname(window.location.pathname) : ""
+  );
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("security");
   const [lang, setLang] = useState<Lang>(() => getInitialLang());
   const [token, setAuthToken] = useState<string>(getToken());
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -1197,9 +1222,13 @@ export default function App() {
   );
   const [selectedLoraComments, setSelectedLoraComments] = useState<GalleryComment[]>([]);
   const [loraCommentDraft, setLoraCommentDraft] = useState("");
+  const [loraDetailPreviewOffset, setLoraDetailPreviewOffset] = useState(0);
   const [loraDescriptionDraft, setLoraDescriptionDraft] = useState("");
   const [loraDescriptionEditing, setLoraDescriptionEditing] = useState(false);
   const [loraDescriptionStatus, setLoraDescriptionStatus] = useState("");
+  const [loraDetailEditing, setLoraDetailEditing] = useState(false);
+  const [loraNameDraft, setLoraNameDraft] = useState("");
+  const [loraTriggerDraft, setLoraTriggerDraft] = useState("");
   const [profileView, setProfileView] = useState<PublicProfile | null>(null);
   const [profileStats, setProfileStats] = useState<PublicProfileStats | null>(null);
   const [profileRelationship, setProfileRelationship] = useState<PublicProfileRelationship | null>(null);
@@ -1210,6 +1239,8 @@ export default function App() {
   const [notificationUnread, setNotificationUnread] = useState(0);
   const [notificationWidgetOpen, setNotificationWidgetOpen] = useState(false);
   const [notificationPulse, setNotificationPulse] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
   const [publicOverviewExpanded, setPublicOverviewExpanded] = useState(true);
   const [dmThreads, setDmThreads] = useState<DMThread[]>([]);
   const [dmActiveThreadId, setDmActiveThreadId] = useState<string>("");
@@ -1423,10 +1454,19 @@ export default function App() {
     () => (Array.isArray(selectedLoraEntry?.preview_file_ids) ? selectedLoraEntry?.preview_file_ids : []),
     [selectedLoraEntry?.preview_file_ids]
   );
+  const selectedLoraPreviewWindow = useMemo(() => {
+    if (!selectedLoraPreviewIds.length) return [] as string[];
+    if (selectedLoraPreviewIds.length <= 2) return selectedLoraPreviewIds;
+    const start = ((loraDetailPreviewOffset % selectedLoraPreviewIds.length) + selectedLoraPreviewIds.length) % selectedLoraPreviewIds.length;
+    return [selectedLoraPreviewIds[start], selectedLoraPreviewIds[(start + 1) % selectedLoraPreviewIds.length]];
+  }, [selectedLoraPreviewIds, loraDetailPreviewOffset]);
   const selectedLoraPreviewIndex = useMemo(() => {
     if (!selectedLoraPreview) return -1;
     return selectedLoraPreviewIds.indexOf(selectedLoraPreview);
   }, [selectedLoraPreviewIds, selectedLoraPreview]);
+  const loraDetailActive = Boolean(
+    view === "lora" && selectedLoraEntry && loraRouteId && selectedLoraEntry.id === loraRouteId
+  );
   const loginSelectedLoraPreviewIds = useMemo(
     () => (Array.isArray(loginSelectedLora?.preview_file_ids) ? loginSelectedLora?.preview_file_ids : []),
     [loginSelectedLora?.preview_file_ids]
@@ -1491,6 +1531,7 @@ export default function App() {
     const syncRoute = () => {
       setIsMobileRouteActive(isMobileRoute(window.location.pathname));
       setView(getViewFromPathname(window.location.pathname));
+      setLoraRouteId(getLoraRouteIdFromPathname(window.location.pathname));
     };
     const mobileClient = detectMobileClient();
     if (mobileClient && window.location.pathname === "/") {
@@ -1503,11 +1544,14 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === "undefined" || !token) return;
-    const targetPath = getPathForView(view, isMobileRouteActive);
+    let targetPath = getPathForView(view, isMobileRouteActive);
+    if (view === "lora" && loraRouteId) {
+      targetPath = `${getPathForView("lora", isMobileRouteActive)}/${encodeURIComponent(loraRouteId)}`;
+    }
     const currentPath = normalizePathname(window.location.pathname);
     if (currentPath === targetPath) return;
     window.history.pushState({}, "", `${targetPath}${window.location.search}${window.location.hash}`);
-  }, [view, isMobileRouteActive, token]);
+  }, [view, isMobileRouteActive, token, loraRouteId]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -1630,7 +1674,8 @@ export default function App() {
     let cancelled = false;
     const url = new URL(window.location.href);
     const imageId = (url.searchParams.get("image") ?? "").trim();
-    const loraId = (url.searchParams.get("lora") ?? "").trim();
+    const loraIdFromPath = getLoraRouteIdFromPathname(window.location.pathname);
+    const loraId = (url.searchParams.get("lora") ?? loraIdFromPath ?? "").trim();
     if (!imageId && !loraId) return;
 
     const clearUnknownParams = () => {
@@ -2686,6 +2731,18 @@ export default function App() {
   }, [notificationPulse]);
 
   useEffect(() => {
+    if (!userMenuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (userMenuRef.current && userMenuRef.current.contains(target)) return;
+      setUserMenuOpen(false);
+    };
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [userMenuOpen]);
+
+  useEffect(() => {
     if (view === "generator") return;
     setGeneratedOutputs([]);
     setActiveGenerationId(null);
@@ -3347,8 +3404,14 @@ export default function App() {
         }
         const threadId = String(data.thread_id);
         setDmStatus("");
-        setView("messages");
         setDmActiveThreadId(threadId);
+        if (isMobileRouteActive) {
+          setView("messages");
+        } else {
+          setMiniDmOpen(true);
+          setMiniDmMode("chat");
+          setMiniDmThreadId(threadId);
+        }
         refreshDmThreads(threadId);
         refreshDmMessages(threadId);
       })
@@ -3603,6 +3666,30 @@ export default function App() {
       .then((data) => setLoraEntries(data.loras ?? []))
       .catch(() => setLoraEntries([]));
   };
+
+  useEffect(() => {
+    if (!token || view !== "lora" || !loraRouteId) return;
+    if (selectedLoraEntry?.id === loraRouteId) return;
+    const existing = loraEntries.find((entry) => entry.id === loraRouteId);
+    if (existing) {
+      openLoraEntry(existing);
+      return;
+    }
+    fetch(`/api/loras/${encodeURIComponent(loraRouteId)}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (res) => ({ ok: res.ok, data: await res.json() }))
+      .then(({ ok, data }) => {
+        if (!ok || !data?.lora) {
+          setLoraRouteId("");
+          setSelectedLoraEntry(null);
+          return;
+        }
+        openLoraEntry(data.lora as LoraEntry);
+      })
+      .catch(() => {
+        setLoraRouteId("");
+        setSelectedLoraEntry(null);
+      });
+  }, [token, view, loraRouteId, loraEntries, selectedLoraEntry?.id]);
 
   const canManageLoraEntry = (entry: LoraEntry) => Boolean(entry.user_id && (entry.user_id === user?.id || isAdmin));
   const manageableVisibleLoraIds = useMemo(
@@ -4535,7 +4622,10 @@ export default function App() {
                         <div className="muted small">No previews yet.</div>
                       )}
                       <div className="tile-meta">
-                        <span>@{entry.username} • LoRA</span>
+                        <div className="tile-user">
+                          {renderAvatar(entry.avatar_file_id, "", entry.username)}
+                          <span>@{entry.username} • LoRA</span>
+                        </div>
                         <span className="tile-meta-stats">
                           <span>♥ {entry.like_count ?? 0}</span>
                           <span>💬 {entry.comment_count ?? 0}</span>
@@ -5097,7 +5187,11 @@ export default function App() {
   };
   const openLoraEntry = (entry: LoraEntry) => {
     setSelectedLoraEntry(entry);
+    setLoraDetailPreviewOffset(0);
     setLoraDescriptionDraft(entry.description ?? "");
+    setLoraNameDraft(entry.name ?? "");
+    setLoraTriggerDraft(entry.trigger_token ?? entry.activator_token ?? "");
+    setLoraDetailEditing(false);
     setLoraDescriptionEditing(false);
     setLoraDescriptionStatus("");
     if (!token) return;
@@ -5107,8 +5201,11 @@ export default function App() {
       fetch(`/api/loras/${entry.id}/comments`, { headers }).then((res) => res.json())
     ])
       .then(([detail, comments]) => {
-        setSelectedLoraEntry({ ...entry, ...(detail.lora ?? {}) });
-        setLoraDescriptionDraft(detail?.lora?.description ?? entry.description ?? "");
+        const merged = { ...entry, ...(detail.lora ?? {}) };
+        setSelectedLoraEntry(merged);
+        setLoraDescriptionDraft(merged.description ?? "");
+        setLoraNameDraft(merged.name ?? "");
+        setLoraTriggerDraft(merged.trigger_token ?? merged.activator_token ?? "");
         setSelectedLoraMeta({
           likes: detail.likes ?? 0,
           comments: detail.comments ?? 0,
@@ -5118,6 +5215,12 @@ export default function App() {
         setLoraCommentDraft("");
       })
       .catch(() => null);
+  };
+
+  const applyLoraEntryPatch = (loraId: string, patch: Partial<LoraEntry>) => {
+    setSelectedLoraEntry((prev) => (prev && prev.id === loraId ? { ...prev, ...patch } : prev));
+    setLoraEntries((prev) => prev.map((entry) => (entry.id === loraId ? { ...entry, ...patch } : entry)));
+    setProfileLoras((prev) => prev.map((entry) => (entry.id === loraId ? { ...entry, ...patch } : entry)));
   };
 
   return (
@@ -5333,6 +5436,7 @@ export default function App() {
                   notificationPulse ? "is-pulse" : ""
                 }`}
                 onClick={() => {
+                  setUserMenuOpen(false);
                   setNotificationWidgetOpen((prev) => !prev);
                   setNotificationPulse(false);
                 }}
@@ -5390,6 +5494,63 @@ export default function App() {
                       Open Notification Center
                     </button>
                   </div>
+                </div>
+              ) : null}
+            </div>
+            <div className="user-menu" ref={userMenuRef}>
+              <button
+                className={`action-btn ghost user-menu-btn ${userMenuOpen ? "is-active" : ""}`}
+                onClick={() => {
+                  setNotificationWidgetOpen(false);
+                  setUserMenuOpen((prev) => !prev);
+                }}
+              >
+                {user?.username ? `@${user.username}` : "Account"}
+              </button>
+              {userMenuOpen ? (
+                <div className="user-menu-popout">
+                  <button
+                    className="user-menu-item"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      openProfile(user?.id);
+                    }}
+                  >
+                    Profile
+                  </button>
+                  <button
+                    className="user-menu-item"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      setView("edit_profile");
+                    }}
+                  >
+                    Edit Profile
+                  </button>
+                  <button
+                    className="user-menu-item"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      setView("settings");
+                    }}
+                  >
+                    Settings
+                  </button>
+                  <button className="user-menu-item is-disabled" disabled>
+                    Favorites (soon)
+                  </button>
+                  <button
+                    className="user-menu-item is-danger"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      setNotificationWidgetOpen(false);
+                      setToken("");
+                      setAuthToken("");
+                      setView("dashboard");
+                    }}
+                  >
+                    Logout
+                  </button>
                 </div>
               ) : null}
             </div>
@@ -6486,16 +6647,68 @@ export default function App() {
 
           <section className={`view ${view === "lora" ? "is-active" : ""}`}>
             <div className="view-header">
-              <h1>{t.lora}</h1>
+              <h1>{loraDetailActive ? selectedLoraEntry?.name ?? t.lora : t.lora}</h1>
               <div className="gallery-header">
-                <p>{loraMode === "private" ? "Private gallery" : "Public feed"}</p>
+                <p>
+                  {loraDetailActive
+                    ? "Model detail"
+                    : loraMode === "private"
+                      ? "Private gallery"
+                      : "Public feed"}
+                </p>
                 <div className="gallery-actions">
-                  {loraMode === "private" ? (
+                  {loraDetailActive ? (
+                    <button
+                      className="action-btn ghost"
+                      onClick={() => {
+                        setLoraRouteId("");
+                        setSelectedLoraEntry(null);
+                        setSelectedLoraPreview(null);
+                      }}
+                    >
+                      Back to list
+                    </button>
+                  ) : null}
+                  {loraDetailActive && selectedLoraEntry && (selectedLoraEntry.user_id === user?.id || user?.role === "admin") ? (
+                    <button
+                      className="action-btn icon-danger-btn"
+                      title={
+                        ["queued", "processing"].includes(String(selectedLoraEntry.remove_status ?? ""))
+                          ? "Delete already queued"
+                          : "Delete model"
+                      }
+                      disabled={["queued", "processing"].includes(String(selectedLoraEntry.remove_status ?? ""))}
+                      onClick={() => {
+                        if (!token) return;
+                        if (!confirm(`Delete LoRA \"${selectedLoraEntry.name}\"? This cannot be undone.`)) return;
+                        fetch(`/api/loras/${selectedLoraEntry.id}`, {
+                          method: "DELETE",
+                          headers: { Authorization: `Bearer ${token}` }
+                        })
+                          .then(async (res) => ({ ok: res.ok, data: await res.json() }))
+                          .then(({ ok }) => {
+                            if (!ok) {
+                              setLoraDescriptionStatus("Delete failed.");
+                              return;
+                            }
+                            setLoraDescriptionStatus("Delete queued.");
+                            setLoraRouteId("");
+                            setSelectedLoraEntry(null);
+                            setSelectedLoraPreview(null);
+                            refreshLoraEntries();
+                          })
+                          .catch(() => setLoraDescriptionStatus("Delete failed."));
+                      }}
+                    >
+                      ⓧ
+                    </button>
+                  ) : null}
+                  {!loraDetailActive && loraMode === "private" ? (
                     <button className="action-btn ghost" onClick={() => setLoraUploadOpen(true)}>
                       Upload LoRA
                     </button>
                   ) : null}
-                  {token ? (
+                  {!loraDetailActive && token ? (
                     <button
                       className="action-btn ghost"
                       onClick={() => {
@@ -6507,16 +6720,18 @@ export default function App() {
                       {loraBulkMode ? "Cancel Bulk Action" : "Bulk Action"}
                     </button>
                   ) : null}
-                  <button
-                    className="action-btn ghost"
-                    onClick={() => setLoraMode((prev) => (prev === "public" ? "private" : "public"))}
-                  >
-                    {loraMode === "public" ? "Private gallery" : "Public feed"}
-                  </button>
+                  {!loraDetailActive ? (
+                    <button
+                      className="action-btn ghost"
+                      onClick={() => setLoraMode((prev) => (prev === "public" ? "private" : "public"))}
+                    >
+                      {loraMode === "public" ? "Private gallery" : "Public feed"}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </div>
-            {loraBulkMode ? (
+            {!loraDetailActive && loraBulkMode ? (
               <div className="bulk-gallery-bar">
                 <span className="muted small">{loraBulkSelection.length} selected</span>
                 <button
@@ -6564,7 +6779,7 @@ export default function App() {
                 {loraBulkMessage ? <span className="muted small">{loraBulkMessage}</span> : null}
               </div>
             ) : null}
-            <div className="lora-grid">
+            {!loraDetailActive ? <div className="lora-grid">
               {loraEntries.map((entry) => (
                 <button
                   key={entry.id}
@@ -6576,6 +6791,7 @@ export default function App() {
                       toggleLoraBulkSelection(entry.id);
                       return;
                     }
+                    setLoraRouteId(entry.id);
                     openLoraEntry(entry);
                   }}
                 >
@@ -6636,7 +6852,235 @@ export default function App() {
                 </button>
               ))}
               {!loraEntries.length ? <div className="muted small">No LoRA entries yet.</div> : null}
-            </div>
+            </div> : null}
+            {loraDetailActive && selectedLoraEntry ? (
+              <div className="lora-detail-page panel">
+                <div className="lora-detail-main">
+                  <div className="lora-detail-stats">
+                    <div className="stat-card">
+                      <div className="label">Likes</div>
+                      <div className="value">{selectedLoraMeta?.likes ?? selectedLoraEntry.like_count ?? 0}</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="label">Downloads</div>
+                      <div className="value">{selectedLoraEntry.download_count ?? "—"}</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="label">Generated</div>
+                      <div className="value">{selectedLoraEntry.generated_count ?? "—"}</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="label">Favorite</div>
+                      <div className="value">{selectedLoraEntry.favorite_count ?? "planned"}</div>
+                    </div>
+                  </div>
+                  <div className="lora-preview-stage">
+                    <button
+                      className="lora-stage-nav"
+                      onClick={() => setLoraDetailPreviewOffset((prev) => prev - 1)}
+                      disabled={selectedLoraPreviewIds.length <= 2}
+                    >
+                      ◀
+                    </button>
+                    <div className="lora-previews large two-up">
+                      {selectedLoraPreviewWindow.map((fileId) => (
+                        <button key={fileId} className="preview-tile" onClick={() => setSelectedLoraPreview(fileId)}>
+                          <img src={withToken(`/api/files/${fileId}`, token)} alt={`${selectedLoraEntry.name} preview`} />
+                        </button>
+                      ))}
+                      {!selectedLoraPreviewIds.length ? <div className="muted small">No previews yet.</div> : null}
+                    </div>
+                    <button
+                      className="lora-stage-nav"
+                      onClick={() => setLoraDetailPreviewOffset((prev) => prev + 1)}
+                      disabled={selectedLoraPreviewIds.length <= 2}
+                    >
+                      ▶
+                    </button>
+                  </div>
+                  <div className="model-description">
+                    <div className="stat-row">
+                      <span>Description</span>
+                      <span />
+                    </div>
+                    <div className="muted small">
+                      {selectedLoraEntry.description?.trim() ? selectedLoraEntry.description : "—"}
+                    </div>
+                  </div>
+                </div>
+                <aside className="lora-detail-side">
+                  <div className="modal-actions lora-actions lora-actions--social">
+                    <button
+                      className="action-btn"
+                      onClick={() => {
+                        if (!token || !selectedLoraMeta) return;
+                        const headers = { Authorization: `Bearer ${token}` };
+                        const method = selectedLoraMeta.user_liked ? "DELETE" : "POST";
+                        fetch(`/api/loras/${selectedLoraEntry.id}/like`, { method, headers })
+                          .then(() => {
+                            setSelectedLoraMeta((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    user_liked: !prev.user_liked,
+                                    likes: prev.likes + (prev.user_liked ? -1 : 1)
+                                  }
+                                : prev
+                            );
+                          })
+                          .catch(() => null);
+                      }}
+                    >
+                      {selectedLoraMeta?.user_liked ? "Unlike" : "Like"} ({selectedLoraMeta?.likes ?? 0})
+                    </button>
+                  </div>
+                  <div className="modal-actions lora-actions lora-actions--primary">
+                    <button
+                      className="action-btn"
+                      onClick={() => {
+                        setSelectedLoraId(selectedLoraEntry.file_id);
+                        setSelectedLoraName(selectedLoraEntry.name);
+                        setSelectedLoraWeight(0.75);
+                        setView("generator");
+                      }}
+                    >
+                      Generate with LoRA
+                    </button>
+                    {selectedLoraEntry.user_id === user?.id || user?.role === "admin" ? (
+                      <a className="action-btn ghost" href={fileUrl(selectedLoraEntry.file_id, token)} target="_blank" rel="noreferrer">
+                        Download LoRA
+                      </a>
+                    ) : null}
+                    {selectedLoraEntry.dataset_file_id &&
+                    (selectedLoraEntry.user_id === user?.id || user?.role === "admin") ? (
+                      <a className="action-btn ghost" href={fileUrl(selectedLoraEntry.dataset_file_id, token)} target="_blank" rel="noreferrer">
+                        Download dataset
+                      </a>
+                    ) : null}
+                  </div>
+                  {selectedLoraEntry.user_id === user?.id || user?.role === "admin" ? (
+                    <div className="panel lora-detail-files">
+                      <div className="detail-title">Model edit</div>
+                      {loraDetailEditing ? (
+                        <div className="description-edit">
+                          <input
+                            className="input"
+                            value={loraNameDraft}
+                            onChange={(e) => setLoraNameDraft(e.target.value)}
+                            placeholder="Model name"
+                          />
+                          <textarea
+                            className="input"
+                            rows={3}
+                            value={loraDescriptionDraft}
+                            onChange={(e) => setLoraDescriptionDraft(e.target.value)}
+                            placeholder="Model description"
+                          />
+                          <input
+                            className="input"
+                            value={loraTriggerDraft}
+                            onChange={(e) => setLoraTriggerDraft(e.target.value)}
+                            placeholder="Trigger / Activator token"
+                          />
+                          <div className="wizard-actions">
+                            <button
+                              className="action-btn ghost"
+                              onClick={() => {
+                                setLoraNameDraft(selectedLoraEntry.name ?? "");
+                                setLoraDescriptionDraft(selectedLoraEntry.description ?? "");
+                                setLoraTriggerDraft(selectedLoraEntry.trigger_token ?? selectedLoraEntry.activator_token ?? "");
+                                setLoraDetailEditing(false);
+                                setLoraDescriptionStatus("");
+                              }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              className="action-btn"
+                              onClick={() => {
+                                if (!token) return;
+                                const nextName = loraNameDraft.trim();
+                                if (!nextName) {
+                                  setLoraDescriptionStatus("Model name is required.");
+                                  return;
+                                }
+                                const nextDescription = loraDescriptionDraft.trim();
+                                const nextTrigger = loraTriggerDraft.trim();
+                                fetch(`/api/loras/${selectedLoraEntry.id}`, {
+                                  method: "PATCH",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                    Authorization: `Bearer ${token}`
+                                  },
+                                  body: JSON.stringify({
+                                    name: nextName,
+                                    description: nextDescription,
+                                    trigger_token: nextTrigger,
+                                    activator_token: nextTrigger
+                                  })
+                                })
+                                  .then(async (res) => ({ ok: res.ok, data: await res.json() }))
+                                  .then(({ ok, data }) => {
+                                    if (!ok) {
+                                      setLoraDescriptionStatus(data?.error ?? "Update failed.");
+                                      return;
+                                    }
+                                    applyLoraEntryPatch(selectedLoraEntry.id, {
+                                      name: nextName,
+                                      description: nextDescription,
+                                      trigger_token: nextTrigger,
+                                      activator_token: nextTrigger
+                                    });
+                                    setLoraDescriptionStatus("Saved.");
+                                    setLoraDetailEditing(false);
+                                  })
+                                  .catch(() => setLoraDescriptionStatus("Update failed."));
+                              }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="description-read">
+                          <button className="action-btn ghost" onClick={() => setLoraDetailEditing(true)}>
+                            Edit model
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                  <div className="panel lora-detail-files">
+                    <div className="detail-title">Details</div>
+                    <div className="stat-row"><span>Source</span><span>{selectedLoraEntry.source === "external" ? "External Uploaded" : "Training"}</span></div>
+                    <div className="stat-row"><span>Visibility</span><span>{selectedLoraEntry.is_public ? "Public" : "Private"}</span></div>
+                    <div className="stat-row"><span>Previews</span><span>{selectedLoraEntry.preview_count ?? 0}/11</span></div>
+                    <div className="stat-row"><span>Trigger / Activator</span><span>{selectedLoraEntry.trigger_token?.trim() || selectedLoraEntry.activator_token?.trim() || "—"}</span></div>
+                  </div>
+                  <div className="panel lora-detail-files">
+                    <div className="detail-title">Files</div>
+                    <div className="stat-row"><span>Main</span><span>LoRA</span></div>
+                    {selectedLoraEntry.dataset_file_id ? <div className="stat-row"><span>Additional</span><span>Dataset</span></div> : null}
+                  </div>
+                  <div className="panel lora-detail-author">
+                    <div className="tile-user">
+                      {renderAvatar(selectedLoraEntry.avatar_file_id ?? null, token, selectedLoraEntry.username)}
+                      <button className="link-btn" onClick={() => openProfile(selectedLoraEntry.user_id)}>
+                        @{selectedLoraEntry.username}
+                      </button>
+                    </div>
+                    <div className="tile-meta-stats">
+                      <span>♥ {selectedLoraEntry.like_count ?? 0}</span>
+                      <span>💬 {selectedLoraEntry.comment_count ?? 0}</span>
+                    </div>
+                    <div className="modal-actions lora-actions">
+                      <button className="action-btn ghost" onClick={() => openProfile(selectedLoraEntry.user_id)}>Profile</button>
+                      <button className="action-btn ghost" onClick={() => openDmWithUser(selectedLoraEntry.user_id)}>Message</button>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            ) : null}
           </section>
 
           <section className={`view ${view === "profile" ? "is-active" : ""}`}>
@@ -6729,7 +7173,15 @@ export default function App() {
                       </button>
                     ))}
                     {profileLoras.map((entry) => (
-                      <button key={entry.id} className="lora-card" onClick={() => openLoraEntry(entry)}>
+                      <button
+                        key={entry.id}
+                        className="lora-card"
+                        onClick={() => {
+                          setView("lora");
+                          setLoraRouteId(entry.id);
+                          openLoraEntry(entry);
+                        }}
+                      >
                         <div className="lora-title">{entry.name}</div>
                         {entry.preview_file_ids && entry.preview_file_ids.length > 0 ? (
                           <div className="lora-previews">
@@ -6741,7 +7193,10 @@ export default function App() {
                           <div className="muted small">No previews yet.</div>
                         )}
                         <div className="tile-meta">
-                          <span>@{entry.username} • LoRA</span>
+                          <div className="tile-user">
+                            {renderAvatar(entry.avatar_file_id, token, entry.username)}
+                            <span>@{entry.username} • LoRA</span>
+                          </div>
                           <span className="tile-meta-stats">
                             <span>♥ {entry.like_count ?? 0}</span>
                             <span>💬 {entry.comment_count ?? 0}</span>
@@ -6946,6 +7401,105 @@ export default function App() {
             </section>
           </section>
 
+          <section className={`view ${view === "edit_profile" ? "is-active" : ""}`}>
+            <div className="view-header">
+              <h1>Edit Profile</h1>
+              <p>Account profile and avatar</p>
+            </div>
+            <section className="panel">
+              <div className="panel-header">
+                <h3>User Profile</h3>
+                <span className="badge">Account</span>
+              </div>
+              <div className="form-grid">
+                <div className="stat-row">
+                  <span>Credits</span>
+                  <span>{user?.credits_balance ?? 0}</span>
+                </div>
+                <div className="stat-row">
+                  <span>Daily Allowance</span>
+                  <span>{user?.credits_daily_allowance ?? 0}</span>
+                </div>
+                <label className="form-row">
+                  Display Name
+                  <input
+                    className="input"
+                    value={profile.display_name}
+                    onChange={(e) => setProfile({ ...profile, display_name: e.target.value })}
+                  />
+                </label>
+                <label className="form-row">
+                  Bio
+                  <input className="input" value={profile.bio} onChange={(e) => setProfile({ ...profile, bio: e.target.value })} />
+                </label>
+                <label className="form-row">
+                  Avatar
+                  <div className="avatar-row">
+                    {profile.avatar_file_id ? (
+                      <img className="avatar-preview" src={fileUrl(profile.avatar_file_id, token, { thumb: true, size: 192 })} alt="avatar" loading="lazy" decoding="async" />
+                    ) : (
+                      <div className="avatar-preview placeholder">No avatar</div>
+                    )}
+                    <input
+                      className="input"
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const form = new FormData();
+                        form.append("file", file);
+                        setAvatarStatus("Uploading...");
+                        fetch("/api/users/me/avatar", {
+                          method: "POST",
+                          headers: { Authorization: `Bearer ${token}` },
+                          body: form
+                        })
+                          .then(async (res) => ({ ok: res.ok, data: await res.json() }))
+                          .then(({ ok, data }) => {
+                            if (!ok) {
+                              setAvatarStatus(data?.error ?? "Upload failed.");
+                              return;
+                            }
+                            setProfile((prev) => ({ ...prev, avatar_file_id: data.file_id }));
+                            setAvatarStatus("Uploaded.");
+                          })
+                          .catch(() => setAvatarStatus("Upload failed."));
+                      }}
+                    />
+                  </div>
+                  {avatarStatus ? <div className="muted small">{avatarStatus}</div> : null}
+                </label>
+                <div className="job-actions">
+                  <button
+                    className="action-btn"
+                    onClick={() => {
+                      fetch("/api/users/me/profile", {
+                        method: "PUT",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${token}`
+                        },
+                        body: JSON.stringify(profile)
+                      }).then(() => null);
+                    }}
+                  >
+                    Save Profile
+                  </button>
+                  <button
+                    className="action-btn ghost"
+                    onClick={() => {
+                      setSettingsTab("security");
+                      setView("settings");
+                    }}
+                  >
+                    Open Settings
+                  </button>
+                </div>
+              </div>
+            </section>
+          </section>
+
           <section className={`view ${view === "settings" ? "is-active" : ""}`}>
             <div className="view-header">
               <h1>{t.settings}</h1>
@@ -6953,12 +7507,6 @@ export default function App() {
             </div>
             <div className="settings-layout">
               <aside className="settings-nav">
-                <button
-                  className={`settings-tab ${settingsTab === "profile" ? "is-active" : ""}`}
-                  onClick={() => setSettingsTab("profile")}
-                >
-                  Profile
-                </button>
                 <button
                   className={`settings-tab ${settingsTab === "security" ? "is-active" : ""}`}
                   onClick={() => setSettingsTab("security")}
@@ -6986,94 +7534,6 @@ export default function App() {
               </aside>
 
               <div className="settings-content">
-                {settingsTab === "profile" ? (
-                  <section className="panel">
-                    <div className="panel-header">
-                      <h3>User Profile</h3>
-                      <span className="badge">Account</span>
-                    </div>
-                    <div className="form-grid">
-                      <div className="stat-row">
-                        <span>Credits</span>
-                        <span>{user?.credits_balance ?? 0}</span>
-                      </div>
-                      <div className="stat-row">
-                        <span>Daily Allowance</span>
-                        <span>{user?.credits_daily_allowance ?? 0}</span>
-                      </div>
-                      <label className="form-row">
-                        Display Name
-                        <input
-                          className="input"
-                          value={profile.display_name}
-                          onChange={(e) => setProfile({ ...profile, display_name: e.target.value })}
-                        />
-                      </label>
-                      <label className="form-row">
-                        Bio
-                        <input
-                          className="input"
-                          value={profile.bio}
-                          onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
-                        />
-                      </label>
-                      <label className="form-row">
-                        Avatar
-                        <div className="avatar-row">
-                          {profile.avatar_file_id ? (
-                            <img className="avatar-preview" src={fileUrl(profile.avatar_file_id, token, { thumb: true, size: 192 })} alt="avatar" loading="lazy" decoding="async" />
-                          ) : (
-                            <div className="avatar-preview placeholder">No avatar</div>
-                          )}
-                          <input
-                            className="input"
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (!file) return;
-                              const form = new FormData();
-                              form.append("file", file);
-                              setAvatarStatus("Uploading...");
-                              fetch("/api/users/me/avatar", {
-                                method: "POST",
-                                headers: { Authorization: `Bearer ${token}` },
-                                body: form
-                              })
-                                .then(async (res) => ({ ok: res.ok, data: await res.json() }))
-                                .then(({ ok, data }) => {
-                                  if (!ok) {
-                                    setAvatarStatus(data?.error ?? "Upload failed.");
-                                    return;
-                                  }
-                                  setProfile((prev) => ({ ...prev, avatar_file_id: data.file_id }));
-                                  setAvatarStatus("Uploaded.");
-                                })
-                                .catch(() => setAvatarStatus("Upload failed."));
-                            }}
-                          />
-                        </div>
-                        {avatarStatus ? <div className="muted small">{avatarStatus}</div> : null}
-                      </label>
-                      <button
-                        className="action-btn"
-                        onClick={() => {
-                          fetch("/api/users/me/profile", {
-                            method: "PUT",
-                            headers: {
-                              "Content-Type": "application/json",
-                              Authorization: `Bearer ${token}`
-                            },
-                            body: JSON.stringify(profile)
-                          }).then(() => null);
-                        }}
-                      >
-                        Save Profile
-                      </button>
-                    </div>
-                  </section>
-                ) : null}
-
                 {settingsTab === "security" ? (
                   <div className="settings-stack">
                     <section className="panel">
@@ -8334,7 +8794,7 @@ export default function App() {
                             adminUserSearchField === "email"
                               ? "user@example.com"
                               : adminUserSearchField === "username"
-                                ? "asatyr"
+                                ? "username"
                                 : "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
                           }
                           value={adminUserSearchValue}
@@ -11299,7 +11759,7 @@ export default function App() {
             </div>
           </div>
         ) : null}
-        {selectedLoraEntry ? (
+        {view === "lora" && selectedLoraEntry && !loraDetailActive ? (
           <div className="image-modal">
             <div className="image-modal-content">
               <button
@@ -11313,25 +11773,56 @@ export default function App() {
               </button>
               <div className="modal-body">
                 <div className="modal-image">
-                  <div className="lora-previews large">
-                    {(selectedLoraEntry.preview_file_ids ?? []).map((fileId) => (
-                      <button
-                        key={fileId}
-                        className="preview-tile"
-                        onClick={() => setSelectedLoraPreview(fileId)}
-                      >
-                        <img src={withToken(`/api/files/${fileId}`, token)} alt={`${selectedLoraEntry.name} preview`} />
-                      </button>
-                    ))}
-                    {!selectedLoraEntry.preview_file_ids?.length ? (
-                      <div className="muted small">No previews yet.</div>
-                    ) : null}
+                  <div className="lora-preview-stage">
+                    <button
+                      className="lora-stage-nav"
+                      onClick={() => setLoraDetailPreviewOffset((prev) => prev - 1)}
+                      disabled={selectedLoraPreviewIds.length <= 2}
+                    >
+                      ◀
+                    </button>
+                    <div className="lora-previews large two-up">
+                      {selectedLoraPreviewWindow.map((fileId) => (
+                        <button key={fileId} className="preview-tile" onClick={() => setSelectedLoraPreview(fileId)}>
+                          <img src={withToken(`/api/files/${fileId}`, token)} alt={`${selectedLoraEntry.name} preview`} />
+                        </button>
+                      ))}
+                      {!selectedLoraPreviewIds.length ? <div className="muted small">No previews yet.</div> : null}
+                    </div>
+                    <button
+                      className="lora-stage-nav"
+                      onClick={() => setLoraDetailPreviewOffset((prev) => prev + 1)}
+                      disabled={selectedLoraPreviewIds.length <= 2}
+                    >
+                      ▶
+                    </button>
+                  </div>
+                  <div className="lora-stage-caption muted small">
+                    {selectedLoraEntry.description?.trim() || "No description yet."}
                   </div>
                 </div>
                 <div className="modal-info">
                   <div className="panel-header">
                     <h3>{selectedLoraEntry.name}</h3>
                     <span className="badge">@{selectedLoraEntry.username}</span>
+                  </div>
+                  <div className="lora-detail-stats">
+                    <div className="stat-card">
+                      <div className="label">Likes</div>
+                      <div className="value">{selectedLoraMeta?.likes ?? selectedLoraEntry.like_count ?? 0}</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="label">Downloads</div>
+                      <div className="value">{selectedLoraEntry.download_count ?? "—"}</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="label">Generated</div>
+                      <div className="value">{selectedLoraEntry.generated_count ?? "—"}</div>
+                    </div>
+                    <div className="stat-card">
+                      <div className="label">Favorite</div>
+                      <div className="value">planned</div>
+                    </div>
                   </div>
                   <div className="model-description">
                     <div className="stat-row">
